@@ -1,0 +1,82 @@
+# Server configuration for cmw-mosec package
+# Model slugs with HuggingFace format (case-insensitive lookup)
+# Each model has unique port for simultaneous running
+
+embedding_models:
+  # FRIDA - Russian embedding model
+  ai-forever/FRIDA:
+    model_id: ai-forever/FRIDA
+    port: 8001
+    dtype: float16
+    batch_size: 16
+    memory_gb: 4.0
+    workers: 1
+
+  # Qwen3 Embeddings
+  Qwen/Qwen3-Embedding-0.6B:
+    model_id: Qwen/Qwen3-Embedding-0.6B
+    port: 8002
+    dtype: float16
+    batch_size: 16
+    memory_gb: 2.0
+    workers: 1
+
+  Qwen/Qwen3-Embedding-4B:
+    model_id: Qwen/Qwen3-Embedding-4B
+    port: 8003
+    dtype: float16
+    batch_size: 16
+    memory_gb: 12.0
+    workers: 1
+
+  Qwen/Qwen3-Embedding-8B:
+    model_id: Qwen/Qwen3-Embedding-8B
+    port: 8004
+    dtype: float16
+    batch_size: 8
+    memory_gb: 22.0
+    workers: 1
+
+reranker_models:
+  # DiTy CrossEncoder - Russian optimized
+  DiTy/cross-encoder-russian-msmarco:
+    model_id: DiTy/cross-encoder-russian-msmarco
+    port: 8010
+    dtype: float16
+    batch_size: 32
+    memory_gb: 2.0
+    workers: 1
+
+  # BGE Reranker - Multilingual
+  BAAI/bge-reranker-v2-m3:
+    model_id: BAAI/bge-reranker-v2-m3
+    port: 8011
+    dtype: float16
+    batch_size: 32
+    memory_gb: 2.0
+    workers: 1
+
+  # Qwen3 Rerankers
+  Qwen/Qwen3-Reranker-0.6B:
+    model_id: Qwen/Qwen3-Reranker-0.6B
+    port: 8012
+    dtype: float16
+    batch_size: 32
+    memory_gb: 2.0
+    workers: 1
+
+  Qwen/Qwen3-Reranker-4B:
+    model_id: Qwen/Qwen3-Reranker-4B
+    port: 8013
+    dtype: float16
+    batch_size: 16
+    memory_gb: 12.0
+    workers: 1
+
+  Qwen/Qwen3-Reranker-8B:
+    model_id: Qwen/Qwen3-Reranker-8B
+    port: 8014
+    dtype: float16
+    batch_size: 8
+    memory_gb: 22.0
+    workers: 1

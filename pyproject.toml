@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cmw-mosec"
+version = "0.1.0"
+description = "Mosec server management for CMW projects with embedding/reranker inference"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "CMW Team"},
+]
+keywords = ["mosec", "embeddings", "reranker", "server", "cmw", "frida", "batch-processing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "click>=8.0",
+    "pydantic>=2.0",
+    "requests>=2.30",
+    "mosec>=0.9.0",
+    "torch>=2.0.0",
+    "transformers>=4.55.0",
+    "sentence-transformers>=3.0.0",
+    "accelerate>=1.10.0",
+    "huggingface-hub>=0.30.0",
+    "llmspec>=0.1.0",
+    "msgspec>=0.18.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+cmw-mosec = "cmw_mosec.cli:cli"
+
+[project.urls]
+Homepage = "https://github.com/arterm-sedov/cmw-mosec"
+Repository = "https://github.com/arterm-sedov/cmw-mosec"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cmw_mosec"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
