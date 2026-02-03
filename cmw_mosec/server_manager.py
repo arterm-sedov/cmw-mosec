@@ -58,6 +58,7 @@ def _save_pid(model_key: str, pid: int, config: MosecModelConfig, actual_device:
         "pid": pid,
         "model_key": model_key,
         "model_id": config.model_id,
+        "model_type": config.model_type,
         "port": config.port,
         "device": config.device,
         "actual_device": actual_device,
@@ -106,8 +107,10 @@ def _generate_mosec_script(config: MosecModelConfig) -> str:
     """Generate Mosec server script based on model type."""
     if config.model_type == "embedding":
         return _generate_embedding_script(config)
-    else:
+    elif config.model_type == "reranker":
         return _generate_reranker_script(config)
+    else:
+        return _generate_guard_script(config)
 
 
 def _generate_embedding_script(config: MosecModelConfig) -> str:
@@ -154,7 +157,7 @@ class Embedding(Worker):
             input_mask_expanded.sum(1), min=1e-9
         )
 
-    def get_embeddings(self, sentences: Union[str, List[Union[str, List[int]]]]):
+    def get_embeddings(self, sentences: Union[str, List[Union[str, List[int]]]]]):
         encoded_input = self.tokenizer(
             sentences, padding=True, truncation=True, return_tensors="pt"
         )
@@ -252,6 +255,202 @@ class Reranker(TypedMsgPackMixin, Worker):
 if __name__ == "__main__":
     server = Server()
     server.append_worker(Reranker, num=WORKERS)
+    server.run(host="0.0.0.0", port=PORT)
+'''
+
+
+def _generate_guard_script(config: MosecModelConfig) -> str:
+    """Generate Mosec guard server script.
+
+    Implements content safety moderation with three-tier classification:
+    - Safe: Content is safe
+    - Controversial: Content may be context-dependent
+    - Unsafe: Content is harmful
+
+    Output format:
+        Safety: Safe|Controversial|Unsafe
+        Categories: <list of categories>
+        Refusal: Yes|No (for response moderation)
+    """
+    max_new_tokens = config.max_new_tokens or 128
+
+    return f'''
+import os
+import re
+from typing import List, Optional
+
+import torch
+import transformers
+from mosec import Server, Worker
+from mosec.mixin import TypedMsgPackMixin
+from msgspec import Struct
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+MODEL_NAME = "{config.model_id}"
+WORKERS = {config.workers}
+PORT = {config.port}
+DTYPE = "{config.dtype}"
+MAX_NEW_TOKENS = {max_new_tokens}
+
+SAFETY_CATEGORIES = [
+    "Violent",
+    "Non-violent Illegal Acts",
+    "Sexual Content or Sexual Acts",
+    "PII",
+    "Suicide & Self-Harm",
+    "Unethical Acts",
+    "Politically Sensitive Topics",
+    "Copyright Violation",
+    "Jailbreak",
+]
+
+
+class GuardRequest(Struct, kw_only=True):
+    content: str
+    context: Optional[str] = None
+    moderation_type: str = "prompt"
+
+
+class GuardResponse(Struct, kw_only=True):
+    safety_level: str
+    categories: List[str]
+    refusal: Optional[str] = None
+    is_safe: bool
+    raw_output: str
+    model: str = MODEL_NAME
+
+
+class GuardWorker(TypedMsgPackMixin, Worker):
+    """MOSEC Worker for Qwen3Guard content safety moderation.
+
+    Supports both prompt moderation (user input only) and response moderation
+    (user query + assistant response) with three-tier classification.
+    """
+
+    def __init__(self):
+        self.model_name = MODEL_NAME
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(
+            self.model_name,
+            trust_remote_code=True
+        )
+        self.model = transformers.AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            torch_dtype=torch.float16 if DTYPE == "float16" else torch.bfloat16,
+            device_map="auto" if torch.cuda.is_available() else None,
+            trust_remote_code=True
+        )
+        self.model.eval()
+
+        self._compile_patterns()
+
+    def _compile_patterns(self):
+        """Compile regex patterns for output parsing."""
+        self.safety_pattern = re.compile(
+            r"Safety:\\s*(Safe|Controversial|Unsafe)",
+            re.IGNORECASE
+        )
+        category_list = "|".join(re.escape(cat) for cat in SAFETY_CATEGORIES)  # noqa: F821
+        self.category_pattern = re.compile(f"({category_list})", re.IGNORECASE)  # noqa: F821
+        self.refusal_pattern = re.compile(r"Refusal:\\s*(Yes|No)", re.IGNORECASE)
+
+    def _format_prompt_moderation(self, content: str) -> str:
+        """Format prompt for user input moderation."""
+        messages = [{{"role": "user", "content": content}}]
+        return self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+    def _format_response_moderation(self, user_prompt: str, assistant_response: str) -> str:
+        """Format prompt for assistant response moderation."""
+        messages = [
+            {{"role": "user", "content": user_prompt}},
+            {{"role": "assistant", "content": assistant_response}}
+        ]
+        return self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+    def _parse_output(self, output: str) -> dict:
+        """Parse model output into structured result."""
+        result = {{
+            "safety_level": "Unknown",
+            "categories": [],
+            "refusal": None,
+            "raw_output": output,
+        }}
+
+        safety_match = self.safety_pattern.search(output)
+        if safety_match:
+            result["safety_level"] = safety_match.group(1).capitalize()
+
+        category_matches = self.category_pattern.findall(output)
+        if category_matches:
+            normalized = []
+            for match in category_matches:
+                for cat in SAFETY_CATEGORIES:
+                    if cat.lower() == match.lower():
+                        normalized.append(cat)
+                        break
+                else:
+                    normalized.append(match)
+            result["categories"] = normalized
+        else:
+            result["categories"] = ["None"]
+
+        refusal_match = self.refusal_pattern.search(output)
+        if refusal_match:
+            result["refusal"] = refusal_match.group(1).capitalize()
+
+        return result
+
+    def forward(self, data: GuardRequest) -> GuardResponse:
+        if data.moderation_type == "response" and data.context:
+            prompt = self._format_response_moderation(data.context, data.content)
+        else:
+            prompt = self._format_prompt_moderation(data.content)
+
+        model_inputs = self.tokenizer(
+            [prompt],
+            return_tensors="pt",
+            truncation=True,
+            max_length=32768
+        )
+
+        if torch.cuda.is_available():
+            model_inputs = {{k: v.cuda() for k, v in model_inputs.items()}}
+
+        with torch.no_grad():
+            generated_ids = self.model.generate(
+                **model_inputs,
+                max_new_tokens=MAX_NEW_TOKENS,
+                do_sample=False,
+                temperature=1.0,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id
+            )
+
+        output_ids = generated_ids[0][len(model_inputs["input_ids"][0]):].tolist()
+        output_text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
+
+        parsed = self._parse_output(output_text)
+
+        return GuardResponse(
+            safety_level=parsed["safety_level"],
+            categories=parsed["categories"],
+            refusal=parsed.get("refusal"),
+            is_safe=parsed["safety_level"] == "Safe",
+            raw_output=parsed["raw_output"],
+        )
+
+
+if __name__ == "__main__":
+    server = Server()
+    server.append_worker(GuardWorker, num=WORKERS)
     server.run(host="0.0.0.0", port=PORT)
 '''
 
@@ -384,7 +583,7 @@ class MosecServerManager:
         if pid and _is_process_running(pid) and _check_server_health(config.port):
             is_running = True
             if pid_info and "started_at" in pid_info:
-                    uptime = time.time() - pid_info["started_at"]
+                uptime = time.time() - pid_info["started_at"]
 
         device = config.device
         if pid_info and "actual_device" in pid_info and pid_info["actual_device"]:
@@ -393,6 +592,7 @@ class MosecServerManager:
         return ServerStatus(
             model_key=model_key,
             model_id=config.model_id,
+            model_type=config.model_type,
             port=config.port,
             device=device,
             pid=pid,
@@ -406,7 +606,7 @@ class MosecServerManager:
 
         registry = ModelRegistry()
         statuses = []
-        for slug in registry.list_embeddings() + registry.list_rerankers():
+        for slug in registry.list_embeddings() + registry.list_rerankers() + registry.list_guards():
             config = registry.get_config(slug)
             status = self.get_status(slug, config)
             if status.pid:

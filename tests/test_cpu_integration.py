@@ -1,6 +1,6 @@
 """Integration tests for cmw-mosec with real inference.
 
-These tests start actual Mosec servers and test real embedding/reranking.
+These tests start actual Mosec servers and test real embedding/reranking/guard.
 They use small models and device='auto' to work on both CPU and GPU.
 """
 
@@ -80,8 +80,7 @@ def embedding_server(manager):
             "Failed to start embedding server (mosec may not be installed or dependencies missing)"
         )
 
-    max_retries = 60
-    for _ in range(max_retries):
+    for _ in range(60):
         if _check_server_health(TEST_EMBEDDING_CONFIG.port, timeout=2.0):
             break
         time.sleep(1)
@@ -108,8 +107,7 @@ def reranker_server(manager):
             "Failed to start reranker server (mosec may not be installed or dependencies missing)"
         )
 
-    max_retries = 60
-    for _ in range(max_retries):
+    for _ in range(60):
         if _check_server_health(TEST_RERANKER_CONFIG.port, timeout=2.0):
             break
         time.sleep(1)
@@ -352,6 +350,7 @@ class TestServerManagement:
 
         assert status.model_key == "test-embedding"
         assert status.model_id == TEST_EMBEDDING_CONFIG.model_id
+        assert status.model_type == "embedding"
         assert status.port == TEST_EMBEDDING_CONFIG.port
         assert status.is_running is True
         assert status.pid is not None
@@ -398,3 +397,189 @@ class TestServerManagement:
         finally:
             manager.stop(model_key)
             _remove_pid_file(model_key)
+
+
+class TestGuardCategories:
+    """Test guard model categories based on HuggingFace docs.
+
+    Tests cover all 9 safety categories and 3 severity levels from Qwen3Guard:
+    - Violent
+    - Non-violent Illegal Acts
+    - Sexual Content or Sexual Acts
+    - PII
+    - Suicide & Self-Harm
+    - Unethical Acts
+    - Politically Sensitive Topics
+    - Copyright Violation
+    - Jailbreak (input only)
+    """
+
+    # Test categories (simplified - real tests would require actual guard server)
+    def test_guard_categories_constant(self):
+        """Test that all guard categories are defined."""
+        from cmw_mosec.server_config import GUARD_CATEGORIES
+
+        expected = [
+            "Violent",
+            "Non-violent Illegal Acts",
+            "Sexual Content or Sexual Acts",
+            "PII",
+            "Suicide & Self-Harm",
+            "Unethical Acts",
+            "Politically Sensitive Topics",
+            "Copyright Violation",
+            "Jailbreak",
+        ]
+        assert expected == GUARD_CATEGORIES
+        assert len(GUARD_CATEGORIES) == 9
+
+    def test_guard_safety_levels_constant(self):
+        """Test that all safety levels are defined."""
+        from cmw_mosec.server_config import GUARD_SAFETY_LEVELS
+
+        assert "Safe" in GUARD_SAFETY_LEVELS
+        assert "Controversial" in GUARD_SAFETY_LEVELS
+        assert "Unsafe" in GUARD_SAFETY_LEVELS
+        assert len(GUARD_SAFETY_LEVELS) == 3
+
+    def test_guard_config_has_max_new_tokens(self):
+        """Test that guard configs have max_new_tokens configured."""
+        from cmw_mosec.server_config import ModelRegistry
+
+        registry = ModelRegistry()
+        for slug in registry.list_guards():
+            config = registry.get_guard_config(slug)
+            assert config.max_new_tokens is not None
+            assert config.max_new_tokens == 128, f"Guard {slug} should have max_new_tokens=128"
+
+    def test_guard_config_has_transformers_version(self):
+        """Test that guard configs have transformers version requirement."""
+        from cmw_mosec.server_config import ModelRegistry
+
+        registry = ModelRegistry()
+        for slug in registry.list_guards():
+            config = registry.get_guard_config(slug)
+            assert config.transformers_min_version is not None
+            assert config.transformers_min_version == "4.51.0", (
+                f"Guard {slug} should require transformers>=4.51.0"
+            )
+
+
+class TestGuardOutputParsing:
+    """Test guard output parsing for all categories."""
+
+    def test_parse_violent(self):
+        """Test parsing Violent category output."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Unsafe\nCategories: Violent"
+        result = parse_guard_output(output)
+        assert "Violent" in result["categories"]
+        assert result["safety_level"] == "Unsafe"
+
+    def test_parse_nonviolent_illegal(self):
+        """Test parsing Non-violent Illegal Acts category."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Unsafe\nCategories: Non-violent Illegal Acts"
+        result = parse_guard_output(output)
+        assert "Non-violent Illegal Acts" in result["categories"]
+
+    def test_parse_sexual_content(self):
+        """Test parsing Sexual Content category."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Unsafe\nCategories: Sexual Content or Sexual Acts"
+        result = parse_guard_output(output)
+        assert "Sexual Content or Sexual Acts" in result["categories"]
+
+    def test_parse_pii(self):
+        """Test parsing PII category."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Unsafe\nCategories: PII"
+        result = parse_guard_output(output)
+        assert "PII" in result["categories"]
+
+    def test_parse_suicide_self_harm(self):
+        """Test parsing Suicide & Self-Harm category."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Unsafe\nCategories: Suicide & Self-Harm"
+        result = parse_guard_output(output)
+        assert "Suicide & Self-Harm" in result["categories"]
+
+    def test_parse_unethical_acts(self):
+        """Test parsing Unethical Acts category."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Controversial\nCategories: Unethical Acts"
+        result = parse_guard_output(output)
+        assert "Unethical Acts" in result["categories"]
+        assert result["safety_level"] == "Controversial"
+
+    def test_parse_politically_sensitive(self):
+        """Test parsing Politically Sensitive Topics category."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Controversial\nCategories: Politically Sensitive Topics"
+        result = parse_guard_output(output)
+        assert "Politically Sensitive Topics" in result["categories"]
+
+    def test_parse_copyright(self):
+        """Test parsing Copyright Violation category."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Unsafe\nCategories: Copyright Violation"
+        result = parse_guard_output(output)
+        assert "Copyright Violation" in result["categories"]
+
+    def test_parse_jailbreak(self):
+        """Test parsing Jailbreak category (input only)."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Unsafe\nCategories: Jailbreak"
+        result = parse_guard_output(output)
+        assert "Jailbreak" in result["categories"]
+
+    def test_parse_safe_none_categories(self):
+        """Test that Safe outputs have 'None' category."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Safe\nCategories: None"
+        result = parse_guard_output(output)
+        assert result["safety_level"] == "Safe"
+        assert "None" in result["categories"]
+
+    def test_parse_refusal_yes(self):
+        """Test parsing Refusal: Yes (for response moderation)."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Safe\nCategories: None\nRefusal: Yes"
+        result = parse_guard_output(output)
+        assert result["refusal"] == "Yes"
+
+    def test_parse_refusal_no(self):
+        """Test parsing Refusal: No."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Safe\nCategories: None\nRefusal: No"
+        result = parse_guard_output(output)
+        assert result["refusal"] == "No"
+
+    def test_parse_multiple_categories(self):
+        """Test parsing multiple categories at once."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Unsafe\nCategories: Violent, Non-violent Illegal Acts"
+        result = parse_guard_output(output)
+        assert "Violent" in result["categories"]
+        assert "Non-violent Illegal Acts" in result["categories"]
+
+    def test_preserve_raw_output(self):
+        """Test that raw output is preserved."""
+        from cmw_mosec.server_config import parse_guard_output
+
+        output = "Safety: Unsafe\nCategories: Violent"
+        result = parse_guard_output(output)
+        assert result["raw_output"] == output

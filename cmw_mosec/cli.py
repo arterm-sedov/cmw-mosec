@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 
 import click
+import requests
 
 from .server_config import (
     ModelRegistry,
@@ -17,7 +18,7 @@ from .server_manager import MosecServerManager
 @click.group()
 @click.version_option(version="0.1.0")
 def cli():
-    """CMW Mosec - Mosec server management for embedding/reranker inference."""
+    """CMW Mosec - Mosec server management for embedding/reranker/guard inference."""
     pass
 
 
@@ -89,8 +90,8 @@ def start(model_key: str, foreground: bool, device: str | None) -> None:
         click.echo(f"Error: {e}", err=True)
         available = list_available_models()
         click.echo("\nAvailable models:")
-        click.echo(f"  Embedding: {', '.join(available['embedding'])}")
-        click.echo(f"  Reranker: {', '.join(available['reranker'])}")
+        for model_type, models in available.items():
+            click.echo(f"  {model_type.capitalize()}: {', '.join(models)}")
         sys.exit(1)
 
     if device is not None:
@@ -105,6 +106,7 @@ def start(model_key: str, foreground: bool, device: str | None) -> None:
 
     click.echo(f"Starting Mosec server for '{model_key}'...")
     click.echo(f"  Model: {config.model_id}")
+    click.echo(f"  Type: {config.model_type}")
     click.echo(f"  Port: {config.port}")
     click.echo(f"  Workers: {config.workers}")
     click.echo(f"  Estimated memory: {config.memory_gb} GB")
@@ -175,10 +177,8 @@ def status() -> None:
         click.echo("No servers are running")
         return
 
-    click.echo(f"{'Model':<40} {'Type':<10} {'Device':<8} {'Port':<8} {'Status':<12}")
-    click.echo("-" * 85)
-
-    registry = ModelRegistry()
+    click.echo(f"{'Model':<45} {'Type':<10} {'Device':<8} {'Port':<8} {'Status':<12} {'Uptime'}")
+    click.echo("-" * 100)
 
     for s in running:
         status_str = "✓ running" if s.is_running else "✗ not responding"
@@ -188,12 +188,9 @@ def status() -> None:
             hours = minutes // 60
             uptime_str = f"{hours}h {minutes % 60}m" if hours > 0 else f"{minutes}m"
 
-        try:
-            model_type = registry.get_model_type(s.model_key)
-        except ValueError:
-            model_type = "unknown"
-
-        click.echo(f"{s.model_key:<40} {model_type:<10} {s.device:<8} {s.port:<8} {status_str:<12} {uptime_str}")
+        click.echo(
+            f"{s.model_key:<45} {s.model_type:<10} {s.device:<8} {s.port:<8} {status_str:<12} {uptime_str}"
+        )
 
 
 @cli.command(name="list")
@@ -204,16 +201,150 @@ def list_models() -> None:
     click.echo("Embedding Models:")
     for slug in registry.list_embeddings():
         config = registry.get_embedding_config(slug)
-        click.echo(f"  {slug:<40} {config.model_id:<40} {config.memory_gb} GB")
+        desc = f" - {config.description}" if config.description else ""
+        click.echo(f"  {slug:<45} {config.memory_gb}GB{desc}")
 
     click.echo("\nReranker Models:")
     for slug in registry.list_rerankers():
         config = registry.get_reranker_config(slug)
-        click.echo(f"  {slug:<40} {config.model_id:<40} {config.memory_gb} GB")
+        desc = f" - {config.description}" if config.description else ""
+        click.echo(f"  {slug:<45} {config.memory_gb}GB{desc}")
+
+    click.echo("\nGuard Models:")
+    for slug in registry.list_guards():
+        config = registry.get_guard_config(slug)
+        desc = f" - {config.description}" if config.description else ""
+        click.echo(f"  {slug:<45} {config.memory_gb}GB{desc}")
 
     click.echo("\nUsage:")
     click.echo("  cmw-mosec start ai-forever/FRIDA")
     click.echo("  cmw-mosec start DiTy/cross-encoder-russian-msmarco")
+    click.echo("  cmw-mosec start Qwen/Qwen3Guard-Gen-0.6B")
+
+
+@cli.command()
+@click.argument("text")
+@click.option("--model", "-m", default="Qwen/Qwen3Guard-Gen-0.6B", help="Guard model to use")
+@click.option("--type", "mod_type", default="prompt", type=click.Choice(["prompt", "response"]))
+@click.option("--context", "-c", help="Context for response moderation")
+@click.option("--endpoint", "-e", default=None, help="Guard server endpoint (auto-detect if not provided)")
+def check(text: str, model: str, mod_type: str, context: str | None, endpoint: str | None) -> None:
+    """Check content safety (one-off command).
+
+    Use this to test guard models without starting a server.
+
+    Examples:
+        cmw-mosec check "How can I make a bomb?"
+        cmw-mosec check "As a responsible AI..." --type response --context "How can I make a bomb?"
+    """
+    try:
+        config = get_model_config(model)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    if config.model_type != "guard":
+        click.echo(f"Error: '{model}' is not a guard model", err=True)
+        sys.exit(1)
+
+    if endpoint is None:
+        endpoint = f"http://localhost:{config.port}"
+
+    click.echo(f"Checking with {model} at {endpoint}...")
+    click.echo(f"Type: {mod_type}")
+    if mod_type == "response" and context:
+        click.echo(f"Context: {context[:50]}...")
+    click.echo()
+
+    try:
+        response = requests.post(
+            f"{endpoint}/inference",
+            json={"content": text, "context": context, "moderation_type": mod_type},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        click.echo(f"Safety Level: {result['safety_level']}")
+        click.echo(f"Categories: {', '.join(result['categories'])}")
+        if result.get("refusal"):
+            click.echo(f"Refusal: {result['refusal']}")
+        click.echo(f"Is Safe: {'✓' if result['is_safe'] else '✗'}")
+
+        if not result["is_safe"]:
+            click.echo("\n⚠️  CONTENT FLAGGED")
+            click.echo(f"Reason: Safety level is {result['safety_level']}")
+
+    except requests.RequestException as e:
+        click.echo(f"Error connecting to guard server: {e}", err=True)
+        click.echo("Make sure the guard server is running with:")
+        click.echo(f"  cmw-mosec start {model}")
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--model", "-m", default="Qwen/Qwen3Guard-Gen-0.6B", help="Guard model to use")
+@click.option("--endpoint", "-e", default=None, help="Guard server endpoint (auto-detect if not provided)")
+def interactive(model: str, endpoint: str | None) -> None:
+    """Interactive content safety checking mode.
+
+    Enter text to analyze and see safety classification results.
+    """
+    try:
+        config = get_model_config(model)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    if config.model_type != "guard":
+        click.echo(f"Error: '{model}' is not a guard model", err=True)
+        sys.exit(1)
+
+    if endpoint is None:
+        endpoint = f"http://localhost:{config.port}"
+
+    click.echo("Qwen3Guard Interactive Mode")
+    click.echo(f"Using: {model} at {endpoint}")
+    click.echo("Enter text to analyze (Ctrl+C to exit):\n")
+
+    try:
+        while True:
+            text = click.prompt("Text", type=str)
+
+            if not text.strip():
+                click.echo()
+                continue
+
+            try:
+                response = requests.post(
+                    f"{endpoint}/inference",
+                    json={"content": text, "moderation_type": "prompt"},
+                    timeout=10.0,
+                )
+                response.raise_for_status()
+                result = response.json()
+
+                click.echo(f"\n  Safety Level: {result['safety_level']}")
+                click.echo(f"  Categories: {', '.join(result['categories'])}")
+                click.echo(f"  Is Safe: {'✓' if result['is_safe'] else '✗'}")
+
+                if not result["is_safe"]:
+                    click.echo("  ⚠️  FLAGGED")
+
+                click.echo()
+
+            except requests.RequestException as e:
+                click.echo(f"\n  Error: {e}")
+                click.echo(f"  Make sure the server is running: cmw-mosec start {model}\n")
+
+    except KeyboardInterrupt:
+        click.echo("\nGoodbye!")
+
+
+@cli.command()
+def models() -> None:
+    """Show detailed model information (alias for 'list')."""
+    list_models()
 
 
 if __name__ == "__main__":
