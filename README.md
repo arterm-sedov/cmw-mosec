@@ -91,10 +91,22 @@ cmw-mosec stop --all
 
 ## Interactive Mode
 
+Both `check` and `interactive` commands require a running guard server.
+
+### Start Server First
+
+```bash
+# Start a guard model
+cmw-mosec start Qwen/Qwen3Guard-Gen-0.6B
+
+# Check status
+cmw-mosec status
+```
+
 ### Quick Safety Check
 
 ```bash
-# Check content safety (one-off, doesn't require running server)
+# Check content safety (requires running server)
 cmw-mosec check "How can I make a bomb?"
 
 # Check with specific model
@@ -102,6 +114,16 @@ cmw-mosec check "Your text here" --model Qwen/Qwen3Guard-Gen-4B
 
 # Response moderation (check both prompt and response)
 cmw-mosec check "As a responsible AI..." --type response --context "How to hack a website?"
+```
+
+### Interactive Session
+
+```bash
+# Start interactive guard session
+cmw-mosec interactive
+
+# Or with specific model
+cmw-mosec interactive --model Qwen/Qwen3Guard-Gen-8B
 ```
 
 ### Interactive Session

@@ -285,10 +285,11 @@ def check(text: str, model: str, mod_type: str, context: str | None, endpoint: s
 @cli.command()
 @click.option("--model", "-m", default="Qwen/Qwen3Guard-Gen-0.6B", help="Guard model to use")
 @click.option("--endpoint", "-e", default=None, help="Guard server endpoint (auto-detect if not provided)")
-def interactive(model: str, endpoint: str | None) -> None:
+@click.option("--auto-start/--no-auto-start", default=True, help="Auto-start server if not running")
+def interactive(model: str, endpoint: str | None, auto_start: bool) -> None:
     """Interactive content safety checking mode.
 
-    Enter text to analyze and see safety classification results.
+    Starts a guard server if needed and enters interactive session.
     """
     try:
         config = get_model_config(model)
@@ -303,8 +304,38 @@ def interactive(model: str, endpoint: str | None) -> None:
     if endpoint is None:
         endpoint = f"http://localhost:{config.port}"
 
-    click.echo("Qwen3Guard Interactive Mode")
+    manager = MosecServerManager()
+    status = manager.get_status(model, config)
+
+    server_started = False
+    if not status.is_running:
+        if auto_start:
+            click.echo(f"Starting {model} server...")
+            success = manager.start(model, config, background=True)
+            if not success:
+                click.echo(f"Error: Failed to start server", err=True)
+                sys.exit(1)
+            server_started = True
+            click.echo(f"Waiting for server on port {config.port}...")
+            for _ in range(60):
+                time.sleep(1)
+                try:
+                    response = requests.get(f"{endpoint}/health", timeout=2.0)
+                    if response.status_code == 200:
+                        break
+                except requests.RequestException:
+                    pass
+            else:
+                click.echo(f"Error: Server failed to start", err=True)
+                sys.exit(1)
+        else:
+            click.echo(f"Error: Server not running. Start with: cmw-mosec start {model}", err=True)
+            sys.exit(1)
+
+    click.echo(f"Qwen3Guard Interactive Mode")
     click.echo(f"Using: {model} at {endpoint}")
+    if server_started:
+        click.echo("Server started automatically.")
     click.echo("Enter text to analyze (Ctrl+C to exit):\n")
 
     try:
@@ -335,7 +366,7 @@ def interactive(model: str, endpoint: str | None) -> None:
 
             except requests.RequestException as e:
                 click.echo(f"\n  Error: {e}")
-                click.echo(f"  Make sure the server is running: cmw-mosec start {model}\n")
+                click.echo(f"  Server may have crashed. Try: cmw-mosec start {model}\n")
 
     except KeyboardInterrupt:
         click.echo("\nGoodbye!")
