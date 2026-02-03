@@ -1,4 +1,7 @@
-"""Process management for Mosec servers."""
+"""Process management for Mosec servers.
+
+Single combined server with dynamic model loading/unloading.
+"""
 
 from __future__ import annotations
 
@@ -15,74 +18,50 @@ from typing import Any
 
 import requests
 
-from .server_config import MosecModelConfig, ServerStatus
+from .server_config import (
+    ModelRegistry,
+    ServerSettings,
+    ServerStatus,
+    load_active_models,
+    load_server_settings,
+)
 
 logger = logging.getLogger(__name__)
 
 PID_DIR = Path.home() / ".cmw-mosec"
+SERVER_PID_FILE = PID_DIR / "server.pid"
 
 
-def _pid_file_key(model_key: str) -> str:
-    """Filesystem-safe key for PID file (slashes not allowed on Windows)."""
-    return model_key.replace("/", "-")
-
-
-def _get_pid_file(model_key: str) -> Path:
-    """Get path to PID file for a model."""
+def _ensure_pid_dir() -> None:
+    """Ensure PID directory exists."""
     PID_DIR.mkdir(parents=True, exist_ok=True)
-    return PID_DIR / f"{_pid_file_key(model_key)}.pid"
 
 
-def _get_actual_device(pid: int) -> str:
-    """Detect actual device (cuda/cpu) by checking GPU usage."""
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            gpu_pids = [int(line.strip()) for line in result.stdout.strip().split("\n") if line.strip()]
-            if pid in gpu_pids:
-                return "cuda"
-        return "cpu"
-    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
-        return "cpu"
-
-
-def _save_pid(model_key: str, pid: int, config: MosecModelConfig, actual_device: str | None = None) -> None:
-    """Save process info to PID file."""
-    pid_file = _get_pid_file(model_key)
+def _save_server_pid(pid: int, port: int) -> None:
+    """Save server PID info."""
+    _ensure_pid_dir()
     data = {
         "pid": pid,
-        "model_key": model_key,
-        "model_id": config.model_id,
-        "model_type": config.model_type,
-        "port": config.port,
-        "device": config.device,
-        "actual_device": actual_device,
+        "port": port,
         "started_at": time.time(),
     }
-    pid_file.write_text(json.dumps(data))
+    SERVER_PID_FILE.write_text(json.dumps(data))
 
 
-def _load_pid_info(model_key: str) -> dict[str, Any] | None:
-    """Load process info from PID file."""
-    pid_file = _get_pid_file(model_key)
-    if not pid_file.exists():
+def _load_server_pid() -> dict[str, Any] | None:
+    """Load server PID info."""
+    if not SERVER_PID_FILE.exists():
         return None
     try:
-        return json.loads(pid_file.read_text())
-    except OSError:
+        return json.loads(SERVER_PID_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
         return None
 
 
-def _remove_pid_file(model_key: str) -> None:
-    """Remove PID file."""
-    pid_file = _get_pid_file(model_key)
-    if pid_file.exists():
-        pid_file.unlink()
+def _remove_server_pid() -> None:
+    """Remove server PID file."""
+    if SERVER_PID_FILE.exists():
+        SERVER_PID_FILE.unlink()
 
 
 def _is_process_running(pid: int) -> bool:
@@ -103,19 +82,20 @@ def _check_server_health(port: int, timeout: float = 2.0) -> bool:
         return False
 
 
-def _generate_mosec_script(config: MosecModelConfig) -> str:
-    """Generate Mosec server script based on model type."""
-    if config.model_type == "embedding":
-        return _generate_embedding_script(config)
-    elif config.model_type == "reranker":
-        return _generate_reranker_script(config)
-    else:
-        return _generate_guard_script(config)
+def _generate_server_script(
+    settings: ServerSettings,
+    embedding_model: str | None,
+    reranker_model: str | None,
+    guard_model: str | None,
+) -> str:
+    """Generate the combined Mosec server script."""
+    embedder_code = ""
+    reranker_code = ""
+    guard_code = ""
 
-
-def _generate_embedding_script(config: MosecModelConfig) -> str:
-    """Generate Mosec embedding server script."""
-    return f'''
+    # Embedding worker
+    if embedding_model:
+        embedder_code = f'''
 import os
 from typing import List, Union
 
@@ -124,20 +104,17 @@ import torch
 import torch.nn.functional as F
 import transformers
 from llmspec import EmbeddingData, EmbeddingRequest, EmbeddingResponse, TokenUsage
-from mosec import ClientError, Server, Worker
+from mosec import ClientError, Worker
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-MODEL_NAME = "{config.model_id}"
-DEVICE = "{config.device}" if "{config.device}" != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
-WORKERS = {config.workers}
-PORT = {config.port}
-DTYPE = "{config.dtype}"
+EMBEDDING_MODEL = "{embedding_model}"
+DTYPE = "{settings.dtype}"
 
 
-class Embedding(Worker):
+class EmbeddingWorker(Worker):
     def __init__(self):
-        self.model_name = MODEL_NAME
+        self.model_name = EMBEDDING_MODEL
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name)
         self.model = transformers.AutoModel.from_pretrained(self.model_name)
         self.device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
@@ -157,6 +134,13 @@ class Embedding(Worker):
             input_mask_expanded.sum(1), min=1e-9
         )
 
+    def cls_pooling(self, model_output):
+        """CLS pooling - use first token (CLS) as sentence representation.
+
+        Recommended for FRIDA according to HuggingFace docs.
+        """
+        return model_output[0][:, 0, :]
+
     def get_embeddings(self, sentences: Union[str, List[Union[str, List[int]]]]]):
         encoded_input = self.tokenizer(
             sentences, padding=True, truncation=True, return_tensors="pt"
@@ -164,7 +148,7 @@ class Embedding(Worker):
         inputs = encoded_input.to(self.device)
         with torch.no_grad():
             model_output = self.model(**inputs)
-        sentence_embeddings = self.mean_pooling(model_output, inputs["attention_mask"])
+        sentence_embeddings = self.cls_pooling(model_output)
         sentence_embeddings = F.normalize(sentence_embeddings, p=2, dim=1)
         token_count = inputs["attention_mask"].sum(dim=1).tolist()[0]
         return token_count, sentence_embeddings
@@ -203,95 +187,61 @@ class Embedding(Worker):
                 total_tokens=token_count,
             ),
         )
-
-
-if __name__ == "__main__":
-    server = Server()
-    from mosec import Runtime
-    emb = Runtime(Embedding)
-    server.register_runtime({{"/v1/embeddings": [emb], "/embeddings": [emb]}})
-    server.run(host="0.0.0.0", port=PORT, workers=WORKERS)
 '''
 
-
-def _generate_reranker_script(config: MosecModelConfig) -> str:
-    """Generate Mosec reranker server script."""
-    return f'''
+    # Reranker worker
+    if reranker_model:
+        reranker_code = f'''
 import os
 from typing import List
 
 from msgspec import Struct
 from sentence_transformers import CrossEncoder
-from mosec import Server, Worker
+from mosec import Worker
 from mosec.mixin import TypedMsgPackMixin
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-MODEL_NAME = "{config.model_id}"
-WORKERS = {config.workers}
-PORT = {config.port}
-DTYPE = "{config.dtype}"
+RERANKER_MODEL = "{reranker_model}"
 
 
-class Request(Struct, kw_only=True):
+class RerankRequest(Struct, kw_only=True):
     query: str
     docs: List[str]
 
 
-class Response(Struct, kw_only=True):
+class RerankResponse(Struct, kw_only=True):
     scores: List[float]
 
 
-class Reranker(TypedMsgPackMixin, Worker):
+class RerankerWorker(TypedMsgPackMixin, Worker):
     def __init__(self):
-        self.model_name = MODEL_NAME
+        self.model_name = RERANKER_MODEL
         self.model = CrossEncoder(self.model_name)
 
-    def forward(self, data: Request) -> Response:
+    def forward(self, data: RerankRequest) -> RerankResponse:
         scores = self.model.predict([[data.query, doc] for doc in data.docs])
-        return Response(scores=scores.tolist())
-
-
-if __name__ == "__main__":
-    server = Server()
-    server.append_worker(Reranker, num=WORKERS)
-    server.run(host="0.0.0.0", port=PORT)
+        return RerankResponse(scores=scores.tolist())
 '''
 
-
-def _generate_guard_script(config: MosecModelConfig) -> str:
-    """Generate Mosec guard server script.
-
-    Implements content safety moderation with three-tier classification:
-    - Safe: Content is safe
-    - Controversial: Content may be context-dependent
-    - Unsafe: Content is harmful
-
-    Output format:
-        Safety: Safe|Controversial|Unsafe
-        Categories: <list of categories>
-        Refusal: Yes|No (for response moderation)
-    """
-    max_new_tokens = config.max_new_tokens or 128
-
-    return f'''
+    # Guard worker
+    if guard_model:
+        guard_code = f'''
 import os
 import re
 from typing import List, Optional
 
 import torch
 import transformers
-from mosec import Server, Worker
+from mosec import Worker
 from mosec.mixin import TypedMsgPackMixin
 from msgspec import Struct
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-MODEL_NAME = "{config.model_id}"
-WORKERS = {config.workers}
-PORT = {config.port}
-DTYPE = "{config.dtype}"
-MAX_NEW_TOKENS = {max_new_tokens}
+GUARD_MODEL = "{guard_model}"
+DTYPE = "{settings.dtype}"
+MAX_NEW_TOKENS = {settings.idle_timeout}
 
 SAFETY_CATEGORIES = [
     "Violent",
@@ -304,6 +254,8 @@ SAFETY_CATEGORIES = [
     "Copyright Violation",
     "Jailbreak",
 ]
+
+SAFETY_CATEGORY_PATTERN = "|".join(re.escape(cat) for cat in SAFETY_CATEGORIES)
 
 
 class GuardRequest(Struct, kw_only=True):
@@ -318,18 +270,12 @@ class GuardResponse(Struct, kw_only=True):
     refusal: Optional[str] = None
     is_safe: bool
     raw_output: str
-    model: str = MODEL_NAME
+    model: str = GUARD_MODEL
 
 
 class GuardWorker(TypedMsgPackMixin, Worker):
-    """MOSEC Worker for Qwen3Guard content safety moderation.
-
-    Supports both prompt moderation (user input only) and response moderation
-    (user query + assistant response) with three-tier classification.
-    """
-
     def __init__(self):
-        self.model_name = MODEL_NAME
+        self.model_name = GUARD_MODEL
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(
             self.model_name,
             trust_remote_code=True
@@ -341,34 +287,26 @@ class GuardWorker(TypedMsgPackMixin, Worker):
             trust_remote_code=True
         )
         self.model.eval()
-
         self._compile_patterns()
 
     def _compile_patterns(self):
-        """Compile regex patterns for output parsing."""
         self.safety_pattern = re.compile(
             r"Safety:\\s*(Safe|Controversial|Unsafe)",
             re.IGNORECASE
         )
-        category_list = "|".join(re.escape(cat) for cat in SAFETY_CATEGORIES)  # noqa: F821
-        self.category_pattern = re.compile(f"({category_list})", re.IGNORECASE)  # noqa: F821
+        category_pattern = "|".join(re.escape(cat) for cat in SAFETY_CATEGORIES)
+        # ruff: noqa: F821
+        self.category_pattern = re.compile(f"({category_pattern})", re.IGNORECASE)
         self.refusal_pattern = re.compile(r"Refusal:\\s*(Yes|No)", re.IGNORECASE)
 
-    def _format_prompt_moderation(self, content: str) -> str:
-        """Format prompt for user input moderation."""
-        messages = [{{"role": "user", "content": content}}]
-        return self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
-
-    def _format_response_moderation(self, user_prompt: str, assistant_response: str) -> str:
-        """Format prompt for assistant response moderation."""
-        messages = [
-            {{"role": "user", "content": user_prompt}},
-            {{"role": "assistant", "content": assistant_response}}
-        ]
+    def _format_prompt(self, content: str, context: Optional[str], moderation_type: str) -> str:
+        if moderation_type == "response" and context:
+            messages = [
+                {{"role": "user", "content": context}},
+                {{"role": "assistant", "content": content}}
+            ]
+        else:
+            messages = [{{"role": "user", "content": content}}]
         return self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
@@ -376,7 +314,6 @@ class GuardWorker(TypedMsgPackMixin, Worker):
         )
 
     def _parse_output(self, output: str) -> dict:
-        """Parse model output into structured result."""
         result = {{
             "safety_level": "Unknown",
             "categories": [],
@@ -409,10 +346,7 @@ class GuardWorker(TypedMsgPackMixin, Worker):
         return result
 
     def forward(self, data: GuardRequest) -> GuardResponse:
-        if data.moderation_type == "response" and data.context:
-            prompt = self._format_response_moderation(data.context, data.content)
-        else:
-            prompt = self._format_prompt_moderation(data.content)
+        prompt = self._format_prompt(data.content, data.context, data.moderation_type)
 
         model_inputs = self.tokenizer(
             [prompt],
@@ -446,47 +380,167 @@ class GuardWorker(TypedMsgPackMixin, Worker):
             is_safe=parsed["safety_level"] == "Safe",
             raw_output=parsed["raw_output"],
         )
+'''
 
+    return f'''
+import os
+import sys
+
+{embedder_code}
+{reranker_code}
+{guard_code}
+
+from mosec import Server, Runtime
+
+PORT = {settings.server_port}
 
 if __name__ == "__main__":
     server = Server()
-    server.append_worker(GuardWorker, num=WORKERS)
+
+    # Register embedding endpoint
+    if "EmbeddingWorker" in globals():
+        from mosec import Runtime
+        emb = Runtime(EmbeddingWorker)
+        server.register_runtime({{"/v1/embeddings": [emb], "/embeddings": [emb]}})
+
+    # Register reranker endpoint
+    if "RerankerWorker" in globals():
+        server.register_runtime({{"/v1/rerank": [Runtime(RerankerWorker)], "/rerank": [Runtime(RerankerWorker)]}})
+
+    # Register guard endpoint
+    if "GuardWorker" in globals():
+        server.register_runtime({{"/v1/moderate": [Runtime(GuardWorker)], "/moderate": [Runtime(GuardWorker)]}})
+
     server.run(host="0.0.0.0", port=PORT)
 '''
 
 
 class MosecServerManager:
-    """Manages Mosec server processes."""
+    """Manages the combined Mosec server with dynamic model loading."""
 
     def __init__(self):
         self.pid_dir = PID_DIR
 
+    def get_status(self) -> ServerStatus:
+        """Get status of the combined server."""
+        pid_info = _load_server_pid()
+        if not pid_info:
+            return ServerStatus(
+                model_key="combined",
+                model_id="combined",
+                model_type="combined",
+                port=0,
+                device="unknown",
+                pid=None,
+                is_running=False,
+                uptime_seconds=None,
+            )
+
+        pid = pid_info.get("pid")
+        port = pid_info.get("port", 0)
+
+        is_running = False
+        uptime = None
+
+        if pid and _is_process_running(pid) and _check_server_health(port):
+            is_running = True
+            if "started_at" in pid_info:
+                uptime = time.time() - pid_info["started_at"]
+
+        try:
+            settings = load_server_settings()
+            device = settings.device
+        except Exception:
+            device = "unknown"
+
+        return ServerStatus(
+            model_key="combined",
+            model_id="combined",
+            model_type="combined",
+            port=port,
+            device=device,
+            pid=pid,
+            is_running=is_running,
+            uptime_seconds=uptime,
+        )
+
+    def is_running(self) -> bool:
+        """Check if server is running."""
+        status = self.get_status()
+        return status.is_running
+
     def start(
         self,
-        model_key: str,
-        config: MosecModelConfig,
+        embedding_model: str | None = None,
+        reranker_model: str | None = None,
+        guard_model: str | None = None,
         background: bool = True,
-    ) -> bool:
-        """Start a Mosec server.
+    ) -> tuple[bool, list[str]]:
+        """Start the combined server.
 
         Args:
-            model_key: Model identifier
-            config: Server configuration
+            embedding_model: Embedding model slug to load
+            reranker_model: Reranker model slug to load
+            guard_model: Guard model slug to load
             background: Whether to run in background
 
         Returns:
-            True if started successfully
+            Tuple of (success, list of failed models)
         """
-        status = self.get_status(model_key, config)
-        if status.is_running:
-            logger.info(f"Server for {model_key} already running on port {config.port}")
-            return True
+        if self.is_running():
+            logger.info("Server already running")
+            return True, []
 
-        import sys
+        try:
+            settings = load_server_settings()
+        except Exception as e:
+            logger.error(f"Failed to load settings: {e}")
+            return False, ["settings"]
 
-        server_script = _generate_mosec_script(config)
+        # Use active models from .env if not specified
+        active = load_active_models()
+        emb_model = embedding_model or active["embedding"]
+        rer_model = reranker_model or active["reranker"]
+        guard_m = guard_model or active["guard"]
+
+        failed_models = []
+
+        # Validate models exist
+        from .server_config import ModelRegistry
+        registry = ModelRegistry()
+
+        if emb_model:
+            try:
+                registry.get_config(emb_model)
+            except ValueError as e:
+                logger.error(f"Embedding model error: {e}")
+                failed_models.append(f"embedding: {emb_model}")
+                emb_model = None
+
+        if rer_model:
+            try:
+                registry.get_config(rer_model)
+            except ValueError as e:
+                logger.error(f"Reranker model error: {e}")
+                failed_models.append(f"reranker: {rer_model}")
+                rer_model = None
+
+        if guard_m:
+            try:
+                registry.get_config(guard_m)
+            except ValueError as e:
+                logger.error(f"Guard model error: {e}")
+                failed_models.append(f"guard: {guard_m}")
+                guard_m = None
+
+        if not emb_model and not rer_model and not guard_m:
+            logger.error("No valid models to load")
+            return False, failed_models
+
+        logger.info(f"Starting server with models: emb={emb_model}, rer={rer_model}, guard={guard_m}")
+
+        server_script = _generate_server_script(settings, emb_model, rer_model, guard_m)
         cmd = [sys.executable, "-c", server_script]
-        logger.info(f"Starting Mosec server for {config.model_id} on port {config.port}")
 
         try:
             if background:
@@ -499,131 +553,125 @@ class MosecServerManager:
             else:
                 process = subprocess.Popen(cmd)
 
-            _save_pid(model_key, process.pid, config)
+            _save_server_pid(process.pid, settings.server_port)
 
             if background:
-                logger.info(f"Waiting for server to start on port {config.port}...")
+                logger.info(f"Waiting for server on port {settings.server_port}...")
                 for _ in range(60):
-                    if _check_server_health(config.port):
-                        logger.info(f"Server {model_key} is ready!")
-                        actual_device = _get_actual_device(process.pid)
-                        _save_pid(model_key, process.pid, config, actual_device)
-                        logger.info(f"Server {model_key} running on device: {actual_device}")
-                        return True
+                    if _check_server_health(settings.server_port):
+                        logger.info("Server is ready!")
+                        return True, failed_models
                     time.sleep(1)
                     if process.poll() is not None:
                         logger.error(f"Server process exited with code {process.returncode}")
-                        _remove_pid_file(model_key)
-                        return False
+                        _remove_server_pid()
+                        return False, failed_models
 
-                logger.warning(f"Server may still be starting... (port {config.port})")
-                return True
+                logger.warning("Server may still be starting...")
+                return True, failed_models
             else:
                 process.wait()
-                return process.returncode == 0
+                return process.returncode == 0, failed_models
 
-        except FileNotFoundError:
-            logger.error("Python not found")
-            return False
         except Exception as e:
             logger.error(f"Failed to start server: {e}")
-            return False
+            return False, failed_models
 
-    def stop(self, model_key: str) -> bool:
-        """Stop a Mosec server."""
-        pid_info = _load_pid_info(model_key)
+    def stop(self) -> bool:
+        """Stop the server."""
+        pid_info = _load_server_pid()
         if not pid_info:
-            logger.info(f"No PID file found for {model_key}")
+            logger.info("No server running")
             return True
 
         pid = pid_info.get("pid")
         if not pid:
-            _remove_pid_file(model_key)
+            _remove_server_pid()
             return True
 
         if not _is_process_running(pid):
-            logger.info(f"Server {model_key} (PID {pid}) is not running")
-            _remove_pid_file(model_key)
+            logger.info("Server not running")
+            _remove_server_pid()
             return True
 
-        logger.info(f"Stopping server {model_key} (PID {pid})...")
+        logger.info(f"Stopping server (PID {pid})...")
 
         try:
             os.kill(pid, signal.SIGTERM)
 
             for _ in range(10):
                 if not _is_process_running(pid):
-                    logger.info(f"Server {model_key} stopped gracefully")
-                    _remove_pid_file(model_key)
+                    logger.info("Server stopped gracefully")
+                    _remove_server_pid()
                     return True
                 time.sleep(1)
 
-            logger.warning(f"Force killing server {model_key} (PID {pid})...")
+            logger.warning(f"Force killing server (PID {pid})...")
             kill_signal = signal.SIGTERM if sys.platform == "win32" else signal.SIGKILL
             with contextlib.suppress(OSError, ProcessLookupError):
                 os.kill(pid, kill_signal)
             time.sleep(1)
 
-            _remove_pid_file(model_key)
+            _remove_server_pid()
             return True
 
         except (OSError, ProcessLookupError) as e:
             logger.warning(f"Error stopping process: {e}")
-            _remove_pid_file(model_key)
+            _remove_server_pid()
             return True
 
-    def get_status(self, model_key: str, config: MosecModelConfig) -> ServerStatus:
-        """Get status of a server."""
-        pid_info = _load_pid_info(model_key)
-        pid = pid_info.get("pid") if pid_info else None
+    def load_model(self, model_slug: str) -> bool:
+        """Load a model into the running server.
 
-        is_running = False
-        uptime = None
+        Note: This requires hot-reload support in Mosec which may not be available.
+        For now, this is a placeholder - full implementation would require
+        Mosec hot-reload or model swapping functionality.
 
-        if pid and _is_process_running(pid) and _check_server_health(config.port):
-            is_running = True
-            if pid_info and "started_at" in pid_info:
-                uptime = time.time() - pid_info["started_at"]
+        Args:
+            model_slug: Model to load
 
-        device = config.device
-        if pid_info and "actual_device" in pid_info and pid_info["actual_device"]:
-            device = pid_info["actual_device"]
+        Returns:
+            True if successful
+        """
+        logger.info(f"Model loading requested: {model_slug}")
+        logger.warning("Dynamic model loading requires Mosec hot-reload support")
 
-        return ServerStatus(
-            model_key=model_key,
-            model_id=config.model_id,
-            model_type=config.model_type,
-            port=config.port,
-            device=device,
-            pid=pid,
-            is_running=is_running,
-            uptime_seconds=uptime,
-        )
+        try:
+            ModelRegistry().get_config(model_slug)
+            logger.info(f"Model {model_slug} config loaded (server restart required to apply)")
+            return True
+        except ValueError as e:
+            logger.error(f"Unknown model: {e}")
+            return False
 
-    def list_running(self) -> list[ServerStatus]:
-        """List all running servers."""
-        from .server_config import ModelRegistry
+    def unload_model(self, model_slug: str) -> bool:
+        """Unload a model from the running server.
 
-        registry = ModelRegistry()
-        statuses = []
-        for slug in registry.list_embeddings() + registry.list_rerankers() + registry.list_guards():
-            config = registry.get_config(slug)
-            status = self.get_status(slug, config)
-            if status.pid:
-                statuses.append(status)
+        Note: See load_model() - this is a placeholder.
 
-        return statuses
+        Args:
+            model_slug: Model to unload
+
+        Returns:
+            True if successful
+        """
+        logger.info(f"Model unloading requested: {model_slug}")
+        logger.warning("Dynamic model unloading requires Mosec hot-reload support")
+        return True
+
+    def list_loaded_models(self) -> dict[str, str | None]:
+        """List currently loaded models.
+
+        Returns:
+            Dict with embedding, reranker, guard -> model slug or None
+        """
+        active = load_active_models()
+        return {
+            "embedding": active["embedding"],
+            "reranker": active["reranker"],
+            "guard": active["guard"],
+        }
 
     def stop_all(self) -> bool:
-        """Stop all running servers."""
-        running = self.list_running()
-        if not running:
-            logger.info("No servers are running")
-            return True
-
-        success = True
-        for status in running:
-            if not self.stop(status.model_key):
-                success = False
-
-        return success
+        """Stop all servers (just stops the combined server)."""
+        return self.stop()

@@ -1,6 +1,6 @@
 """Server configuration management for Mosec.
 
-Supports case-insensitive model slug lookup with canonical normalization.
+Configuration is loaded from .env file - this is the single source of truth.
 """
 
 from __future__ import annotations
@@ -10,9 +10,134 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from dotenv import dotenv_values
 from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
+
+
+class ServerSettings(BaseModel):
+    """Server settings loaded from .env file.
+
+    .env is the single source of truth - missing values raise errors.
+    """
+
+    server_port: int = Field(description="Server port (single entry point)")
+    device: str = Field(description="Device (auto/cpu/cuda)")
+    dtype: str = Field(description="Default dtype (float16/float32/bf16/int8)")
+    batch_size: int = Field(description="Default batch size")
+    idle_timeout: int = Field(description="Idle timeout in seconds (0=disabled)")
+    log_level: str = Field(description="Log level (DEBUG/INFO/WARNING/ERROR)")
+
+    @field_validator("server_port")
+    @classmethod
+    def validate_port(cls, v: int) -> int:
+        if not 1 <= v <= 65535:
+            raise ValueError("SERVER_PORT must be between 1-65535")
+        return v
+
+    @field_validator("batch_size")
+    @classmethod
+    def validate_batch_size(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("BATCH_SIZE must be at least 1")
+        return v
+
+    @field_validator("idle_timeout")
+    @classmethod
+    def validate_idle_timeout(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("IDLE_TIMEOUT must be non-negative")
+        return v
+
+
+def load_server_settings() -> ServerSettings:
+    """Load server settings from .env file.
+
+    Raises:
+        ValueError: If required .env variables are missing
+    """
+    env_path = Path(__file__).parent.parent / ".env"
+
+    if not env_path.exists():
+        raise FileNotFoundError(
+            f".env file not found at {env_path}. "
+            "Copy .env-example to .env and configure."
+        )
+
+    raw_values = dotenv_values(env_path)
+
+    def get_required(raw: dict[str, Any], key: str) -> str:
+        val = raw.get(key)
+        if val is None or val == "":
+            raise ValueError(f"Required environment variable not set: {key}")
+        return str(val)
+
+    def get_required_int(raw: dict[str, Any], key: str) -> int:
+        val = get_required(raw, key)
+        try:
+            return int(val)
+        except ValueError as err:
+            raise ValueError(f"{key} must be a valid integer, got: {val}") from err
+
+    return ServerSettings(
+        server_port=get_required_int(raw_values, "SERVER_PORT"),
+        device=get_required(raw_values, "DEVICE"),
+        dtype=get_required(raw_values, "DTYPE"),
+        batch_size=get_required_int(raw_values, "BATCH_SIZE"),
+        idle_timeout=get_required_int(raw_values, "IDLE_TIMEOUT"),
+        log_level=get_required(raw_values, "LOG_LEVEL"),
+    )
+
+
+def load_active_models() -> dict[str, str]:
+    """Load active models from .env file.
+
+    Returns:
+        Dict with keys: embedding, reranker, guard -> model slug
+
+    Raises:
+        ValueError: If required active model variables are missing
+    """
+    env_path = Path(__file__).parent.parent / ".env"
+
+    if not env_path.exists():
+        raise FileNotFoundError(
+            f".env file not found at {env_path}. "
+            "Copy .env-example to .env and configure."
+        )
+
+    raw_values = dotenv_values(env_path)
+
+    def get_required(raw: dict[str, Any], key: str) -> str:
+        val = raw.get(key)
+        if val is None or val == "":
+            raise ValueError(f"Required environment variable not set: {key}")
+        return str(val)
+
+    return {
+        "embedding": get_required(raw_values, "ACTIVE_EMBEDDING_MODEL"),
+        "reranker": get_required(raw_values, "ACTIVE_RERANKER_MODEL"),
+        "guard": get_required(raw_values, "ACTIVE_GUARD_MODEL"),
+    }
+
+
+def get_active_model_for_type(model_type: str) -> str:
+    """Get the active model slug for a given type.
+
+    Args:
+        model_type: One of 'embedding', 'reranker', 'guard'
+
+    Returns:
+        Active model slug
+
+    Raises:
+        ValueError: If .env is missing or variable is not set
+    """
+    active = load_active_models()
+    if model_type not in active:
+        raise ValueError(f"Unknown model type: {model_type}")
+    return active[model_type]
 
 
 class MosecModelConfig(BaseModel):
