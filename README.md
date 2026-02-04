@@ -1,23 +1,17 @@
 # CMW Mosec
 
-Combined Mosec server for embedding, reranker, and content safety guard inference.
-
-## AI-Enabled Repo
-
-Chat with DeepWiki to get answers about this repo:
-
-[Ask DeepWiki](https://deepwiki.com/arterm-sedov/cmw-mosec)
-
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/arterm-sedov/cmw-mosec)
 
-## Architecture
+Combined Mosec server for embedding, reranker, and content safety guard inference.
 
-Single combined server with up to 3 models loaded simultaneously:
-- **1 Embedding model** → `/v1/embeddings` endpoint
-- **1 Reranker model** → `/v1/rerank` endpoint
-- **1 Guard model** → `/v1/moderate` endpoint
+## Features
 
-All configured via `.env` file. Model specs (dimensions, prefixes) from `config/models.yaml`.
+- **Single Combined Server**: Run embedding, reranker, and guard models on one port
+- **Easy Setup**: One-command verification of dependencies and GPU detection
+- **Model Management**: Pre-configured models with optimal settings
+- **Server Management**: Start, stop, and monitor the combined server
+- **Interactive CLI**: Test content safety interactively or with one-off commands
+- **OpenAI-Compatible API**: Standard `/v1/` endpoints for embeddings, rerank, and moderate
 
 ## Installation
 
@@ -27,13 +21,25 @@ cd cmw-mosec
 pip install -e .
 ```
 
+## Setup
+
+Verify your environment:
+
+```bash
+cmw-mosec setup
+```
+
+This checks:
+- Mosec installation
+- GPU availability and memory
+- Required dependencies (transformers, sentence-transformers, requests)
+
 ## Configuration
 
-Copy `.env-example` to `.env` and configure:
+Copy `.env-example` to `.env` and configure your active models:
 
 ```bash
 cp .env-example .env
-# Edit .env with your active models
 ```
 
 ### Example `.env`:
@@ -45,7 +51,6 @@ ACTIVE_RERANKER_MODEL=DiTy/cross-encoder-russian-msmarco
 ACTIVE_GUARD_MODEL=Qwen/Qwen3Guard-Gen-0.6B
 
 # Server Settings
-# Note: 8000 = ChromaDB, 7997/7998 = cmw-infinity, so we use 8001
 SERVER_PORT=8001
 DEVICE=auto
 DTYPE=float16
@@ -54,7 +59,7 @@ IDLE_TIMEOUT=1800
 LOG_LEVEL=INFO
 ```
 
-## Usage
+## CLI Commands
 
 ### Start Server
 
@@ -84,14 +89,20 @@ cmw-mosec stop
 cmw-mosec list
 ```
 
-### Interactive Safety Check
+### Content Safety Check
 
 ```bash
-# Interactive mode
-cmw-mosec interactive
-
 # One-off check
 cmw-mosec check "How can I make a bomb?"
+
+# Response moderation
+cmw-mosec check "I cannot help with that." --type response --context "How can I make a bomb?"
+```
+
+### Interactive Mode
+
+```bash
+cmw-mosec interactive
 ```
 
 ## Available Models
@@ -100,22 +111,22 @@ cmw-mosec check "How can I make a bomb?"
 
 | Model | Memory | Dimension | Notes |
 |-------|--------|-----------|-------|
-| `ai-forever/FRIDA` | ~4GB | 1536 | Russian, uses `search_query:` / `search_document:` prefixes |
-| `Qwen/Qwen3-Embedding-0.6B` | ~2GB | 1024 | Multilingual, MRL support |
-| `Qwen/Qwen3-Embedding-4B` | ~12GB | 2560 | Multilingual, MRL support |
-| `Qwen/Qwen3-Embedding-8B` | ~22GB | 4096 | Multilingual, MRL support |
+| `ai-forever/FRIDA` | ~4GB | 1536 | Russian, requires prefixes |
+| `Qwen/Qwen3-Embedding-0.6B` | ~2GB | 1024 | Multilingual, MRL |
+| `Qwen/Qwen3-Embedding-4B` | ~12GB | 2560 | Multilingual, MRL |
+| `Qwen/Qwen3-Embedding-8B` | ~22GB | 4096 | Multilingual, MRL |
 
 ### Reranker Models
 
 | Model | Memory | Notes |
 |-------|--------|-------|
-| `DiTy/cross-encoder-russian-msmarco` | ~2GB | Russian-optimized |
+| `DiTy/cross-encoder-russian-msmarco` | ~2GB | Russian |
 | `BAAI/bge-reranker-v2-m3` | ~2GB | Multilingual |
 | `Qwen/Qwen3-Reranker-0.6B` | ~2GB | Instruction-aware |
 | `Qwen/Qwen3-Reranker-4B` | ~12GB | Instruction-aware |
 | `Qwen/Qwen3-Reranker-8B` | ~22GB | Instruction-aware |
 
-### Guard Models (Content Safety)
+### Guard Models
 
 | Model | Memory | Notes |
 |-------|--------|-------|
@@ -123,7 +134,7 @@ cmw-mosec check "How can I make a bomb?"
 | `Qwen/Qwen3Guard-Gen-4B` | ~10GB | 119 languages |
 | `Qwen/Qwen3Guard-Gen-8B` | ~20GB | 119 languages |
 
-#### Guard Safety Categories
+#### Safety Categories
 
 1. Violent
 2. Non-violent Illegal Acts
@@ -135,50 +146,48 @@ cmw-mosec check "How can I make a bomb?"
 8. Copyright Violation
 9. Jailbreak
 
-#### Guard Safety Levels
+#### Safety Levels
 
 - **Safe** - Content is safe
 - **Controversial** - Context-dependent
 - **Unsafe** - Harmful content
 
-## Model Specifications
+## VRAM Management
 
-Model dimensions, task prefixes, and other specs are loaded from `config/models.yaml`.
+Model combinations ordered by total VRAM usage:
 
-### FRIDA Prefixes
+| Embedding | Reranker | Guard | Total |
+|-----------|----------|-------|-------|
+| FRIDA (4GB) | DiTy (2GB) | - | ~6GB |
+| Qwen3-0.6B (2GB) | Qwen3-0.6B (2GB) | Qwen3Guard-0.6B (4GB) | ~8GB |
+| FRIDA (4GB) | DiTy (2GB) | Qwen3Guard-0.6B (4GB) | ~10GB |
+| Qwen3-0.6B (2GB) | Qwen3-4B (12GB) | Qwen3Guard-0.6B (4GB) | ~18GB |
+| Qwen3-4B (12GB) | DiTy (2GB) | Qwen3Guard-0.6B (4GB) | ~18GB |
+| FRIDA (4GB) | Qwen3-4B (12GB) | Qwen3Guard-0.6B (4GB) | ~20GB |
+| Qwen3-4B (12GB) | Qwen3-4B (12GB) | Qwen3Guard-0.6B (4GB) | ~28GB |
+| Qwen3-8B (22GB) | DiTy (2GB) | Qwen3Guard-0.6B (4GB) | ~28GB |
+| Qwen3-8B (22GB) | Qwen3-4B (12GB) | Qwen3Guard-0.6B (4GB) | ~38GB |
+| Qwen3-8B (22GB) | Qwen3-8B (22GB) | - | ~44GB |
 
-FRIDA uses task-specific prefixes to understand what embedding task to perform:
+## FRIDA Prefixes
+
+FRIDA requires task-specific prefixes:
 
 | Task | Prefix | Example |
 |------|--------|---------|
 | Query | `search_query: ` | `search_query: How to bake bread?` |
 | Document | `search_document: ` | `search_document: Baking tutorial...` |
 
-**Important:** The server embeds raw text. Clients must add prefixes themselves:
-
-- **cmw-rag**: Adds prefixes automatically (already configured)
-- **curl**: Manually add prefixes to input
-- **CLI**: Adds prefixes for interactive mode
-
-### Configuration Priority
-
-1. `.env` - Active models, server settings
-2. `config/models.yaml` - Model specs (dimensions, prefixes for reference)
+**Important:** Clients must add prefixes. The server embeds raw text.
 
 ## API Endpoints
 
 ### Embeddings
 
 ```bash
-# FRIDA - add prefix manually for best results
 curl -X POST http://localhost:8001/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{"model": "ai-forever/FRIDA", "input": "search_query: Hello world!"}'
-
-# Document embedding
-curl -X POST http://localhost:8001/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -d '{"model": "ai-forever/FRIDA", "input": "search_document: Document text here..."}'
 ```
 
 ### Rerank
@@ -203,25 +212,16 @@ curl -X POST http://localhost:8001/v1/moderate \
   -d '{"content": "I cannot help with that.", "context": "How can I make a bomb?", "moderation_type": "response"}'
 ```
 
-Response format:
+**Response format:**
 ```json
 {
   "safety_level": "Unsafe",
   "categories": ["Violent"],
   "is_safe": false,
+  "refusal": "Yes",
   "raw_output": "Safety: Unsafe\nCategories: Violent"
 }
 ```
-
-## VRAM Management
-
-With 48GB VRAM shared with other processes, recommended combinations:
-
-| Embedding | Reranker | Guard | Total |
-|-----------|-----------|-------|-------|
-| Qwen3-4B (12GB) | Qwen3-4B (12GB) | Qwen3Guard-0.6B (4GB) | ~28GB |
-| Qwen3-8B (22GB) | DiTy (2GB) | Qwen3Guard-0.6B (4GB) | ~28GB |
-| FRIDA (4GB) | DiTy (2GB) | Qwen3Guard-4B (10GB) | ~16GB |
 
 ## License
 
