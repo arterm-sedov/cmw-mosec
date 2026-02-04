@@ -281,13 +281,13 @@ def list_models() -> None:
     click.echo(f"  Guard: {active.get('guard') or 'not set'}")
 
 
-@cli.command()
+@cli.command(name="check-guard")
 @click.argument("text")
-@click.option("--model", "-m", help="Guard model to use (from .env if not specified)")
+@click.option("--model", "-m", help="Guard model to use (from running server if not specified)")
 @click.option("--type", "mod_type", default="prompt", type=click.Choice(["prompt", "response"]))
 @click.option("--context", "-c", help="Context for response moderation")
-def check(text: str, model: str | None, mod_type: str, context: str | None) -> None:
-    """Check content safety (requires running server)."""
+def check_guard(text: str, model: str | None, mod_type: str, context: str | None) -> None:
+    """Check content safety with both safe and unsafe examples (requires running server)."""
     manager = MosecServerManager()
 
     if not manager.is_running():
@@ -295,51 +295,56 @@ def check(text: str, model: str | None, mod_type: str, context: str | None) -> N
         click.echo("Start with: cmw-mosec serve")
         sys.exit(1)
 
-    active = load_active_models()
-    guard_model = model or active.get("guard")
+    loaded = manager.list_loaded_models()
+    guard_model = model or loaded.get("guard")
 
     if not guard_model:
-        click.echo("Error: No guard model configured", err=True)
-        click.echo("Set ACTIVE_GUARD_MODEL in .env")
+        click.echo("Error: No guard model loaded", err=True)
+        click.echo("Start server with --guard flag")
         sys.exit(1)
 
     status = manager.get_status()
     endpoint = f"http://localhost:{status.port}/v1/moderate"
 
     click.echo(f"Checking with {guard_model} at {endpoint}...")
-    click.echo(f"Type: {mod_type}")
-    if mod_type == "response" and context:
-        click.echo(f"Context: {context[:50]}...")
     click.echo()
 
-    try:
-        response = requests.post(
-            endpoint,
-            json={"content": text, "context": context, "moderation_type": mod_type},
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        result = response.json()
+    test_cases = [
+        (text, mod_type, context, "User input"),
+        ("Hello, how are you today?", "prompt", None, "Safe example"),
+    ]
 
-        click.echo(f"Safety Level: {result['safety_level']}")
-        click.echo(f"Categories: {', '.join(result['categories'])}")
-        if result.get("refusal"):
-            click.echo(f"Refusal: {result['refusal']}")
-        click.echo(f"Is Safe: {'✓' if result['is_safe'] else '✗'}")
+    for content, m_type, ctx, label in test_cases:
+        try:
+            payload = {"content": content, "moderation_type": m_type}
+            if ctx:
+                payload["context"] = ctx
 
-        if not result["is_safe"]:
-            click.echo("\n⚠️  CONTENT FLAGGED")
+            response = requests.post(endpoint, json=payload, timeout=30.0)
+            response.raise_for_status()
+            result = response.json()
 
-    except requests.RequestException as e:
-        click.echo(f"Error connecting to server: {e}", err=True)
-        sys.exit(1)
+            click.echo(f"--- {label} ---")
+            click.echo(f"Content: {content[:60]}...")
+            click.echo(f"Safety Level: {result['safety_level']}")
+            click.echo(f"Categories: {', '.join(result['categories'])}")
+            if result.get("refusal"):
+                click.echo(f"Refusal: {result['refusal']}")
+            status_icon = "✓" if result["is_safe"] else "✗"
+            click.echo(f"Is Safe: {status_icon}")
+
+            if not result["is_safe"]:
+                click.echo("⚠️  CONTENT FLAGGED")
+            click.echo()
+
+        except requests.RequestException as e:
+            click.echo(f"Error for '{label}': {e}", err=True)
 
 
-@cli.command()
-@click.argument("text")
-@click.option("--model", "-m", help="Embedding model to use (from .env if not specified)")
-def embed(text: str, model: str | None) -> None:
-    """Get embeddings for text (requires running server)."""
+@cli.command(name="check-embed")
+@click.option("--model", "-m", help="Embedding model to use (from running server if not specified)")
+def check_embed(model: str | None) -> None:
+    """Test embedding model with preset examples (requires running server)."""
     manager = MosecServerManager()
 
     if not manager.is_running():
@@ -347,58 +352,126 @@ def embed(text: str, model: str | None) -> None:
         click.echo("Start with: cmw-mosec serve")
         sys.exit(1)
 
-    active = load_active_models()
-    embedding_model = model or active.get("embedding")
+    loaded = manager.list_loaded_models()
+    embedding_model = model or loaded.get("embedding")
 
     if not embedding_model:
-        click.echo("Error: No embedding model configured", err=True)
-        click.echo("Set ACTIVE_EMBEDDING_MODEL in .env")
+        click.echo("Error: No embedding model loaded", err=True)
+        click.echo("Start server with --embedding flag")
         sys.exit(1)
 
     status = manager.get_status()
     endpoint = f"http://localhost:{status.port}/v1/embeddings"
 
-    click.echo(f"Embedding with {embedding_model} at {endpoint}...")
+    test_cases = [
+        "The quick brown fox jumps over the lazy dog.",
+        "Машинное обучение - это подраздел искусственного интеллекта.",
+        "Natural language processing enables computers to understand human language.",
+    ]
+
+    click.echo(f"Testing embedding model: {embedding_model}")
+    click.echo(f"Endpoint: {endpoint}")
     click.echo()
 
     try:
-        response = requests.post(
-            endpoint,
-            json={"input": text, "model": embedding_model},
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        result = response.json()
+        for i, text in enumerate(test_cases, 1):
+            response = requests.post(
+                endpoint,
+                json={"input": text, "model": embedding_model},
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            result = response.json()
 
-        embedding = result["data"][0]["embedding"]
-        dimension = len(embedding)
-        usage = result.get("usage", {})
+            embedding = result["data"][0]["embedding"]
+            dimension = len(embedding)
+            usage = result.get("usage", {})
 
-        click.echo(f"Dimension: {dimension}")
-        click.echo(f"Prompt tokens: {usage.get('prompt_tokens', 'N/A')}")
-        click.echo(f"Total tokens: {usage.get('total_tokens', 'N/A')}")
-        click.echo("\nEmbedding (first 10 values):")
-        click.echo(f"  {embedding[:10]}")
-        if dimension > 10:
-            click.echo(f"  ... ({dimension - 10} more values)")
+            click.echo(f"--- Test {i} ---")
+            click.echo(f"Text: {text[:60]}{'...' if len(text) > 60 else ''}")
+            click.echo(f"Dimension: {dimension}")
+            click.echo(f"Tokens: {usage.get('total_tokens', 'N/A')}")
+            click.echo(f"First 5 values: {embedding[:5]}")
+            click.echo()
+
+        click.echo("✓ All embedding tests passed!")
 
     except requests.RequestException as e:
         click.echo(f"Error connecting to server: {e}", err=True)
         sys.exit(1)
 
 
-@cli.command()
-@click.argument("query")
-@click.argument("documents", nargs=-1, required=True)
-@click.option("--model", "-m", help="Reranker model to use (from .env if not specified)")
-@click.option("--top-k", type=int, help="Show top K results")
-def rerank(query: str, documents: tuple[str, ...], model: str | None, top_k: int | None) -> None:
-    """Rerank documents for a query (requires running server)."""
+@cli.command(name="check-rerank")
+@click.option("--model", "-m", help="Reranker model to use (from running server if not specified)")
+def check_rerank(model: str | None) -> None:
+    """Test reranker model with preset examples (requires running server)."""
     manager = MosecServerManager()
 
     if not manager.is_running():
         click.echo("Error: Server is not running", err=True)
         click.echo("Start with: cmw-mosec serve")
+        sys.exit(1)
+
+    loaded = manager.list_loaded_models()
+    reranker_model = model or loaded.get("reranker")
+
+    if not reranker_model:
+        click.echo("Error: No reranker model loaded", err=True)
+        click.echo("Start server with --reranker flag")
+        sys.exit(1)
+
+    status = manager.get_status()
+    endpoint = f"http://localhost:{status.port}/v1/rerank"
+
+    test_cases = [
+        {
+            "query": "машина",
+            "documents": ["Автомобиль для перевозки грузов", "Погода в Москве", "Куриное блюдо"],
+        },
+        {
+            "query": "artificial intelligence",
+            "documents": [
+                "Paris is the capital of France",
+                "AI and deep learning are transforming technology",
+                "Python is a programming language",
+            ],
+        },
+    ]
+
+    click.echo(f"Testing reranker model: {reranker_model}")
+    click.echo(f"Endpoint: {endpoint}")
+    click.echo()
+
+    try:
+        for i, test_case in enumerate(test_cases, 1):
+            query = test_case["query"]
+            documents = test_case["documents"]
+
+            response = requests.post(
+                endpoint,
+                json={"query": query, "documents": documents},
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            scores = result["scores"]
+            ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+
+            click.echo(f"--- Test {i} ---")
+            click.echo(f"Query: {query}")
+            click.echo("Ranked results:")
+            for rank, (idx, score) in enumerate(ranked, 1):
+                doc_preview = (
+                    documents[idx][:60] + "..." if len(documents[idx]) > 60 else documents[idx]
+                )
+                click.echo(f"  {rank}. [{score:.4f}] {doc_preview}")
+            click.echo()
+
+        click.echo("✓ All reranking tests passed!")
+
+    except requests.RequestException as e:
+        click.echo(f"Error connecting to server: {e}", err=True)
         sys.exit(1)
 
     active = load_active_models()
@@ -412,41 +485,61 @@ def rerank(query: str, documents: tuple[str, ...], model: str | None, top_k: int
     status = manager.get_status()
     endpoint = f"http://localhost:{status.port}/v1/rerank"
 
-    click.echo(f"Reranking with {reranker_model} at {endpoint}...")
-    click.echo(f"Query: {query}")
+    test_cases = [
+        {
+            "query": "машина",
+            "documents": ["Автомобиль для перевозки грузов", "Погода в Москве", "Куриное блюдо"],
+        },
+        {
+            "query": "artificial intelligence",
+            "documents": [
+                "Paris is the capital of France",
+                "AI and deep learning are transforming technology",
+                "Python is a programming language",
+            ],
+        },
+    ]
+
+    click.echo(f"Testing reranker model: {reranker_model}")
+    click.echo(f"Endpoint: {endpoint}")
     click.echo()
 
     try:
-        response = requests.post(
-            endpoint,
-            json={"query": query, "documents": list(documents)},
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        result = response.json()
+        for i, test_case in enumerate(test_cases, 1):
+            query = test_case["query"]
+            documents = test_case["documents"]
 
-        scores = result["scores"]
+            response = requests.post(
+                endpoint,
+                json={"query": query, "documents": documents},
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            result = response.json()
 
-        if top_k:
-            ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:top_k]
-        else:
+            scores = result["scores"]
             ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
 
-        click.echo("Ranked results:")
-        for rank, (idx, score) in enumerate(ranked, 1):
-            doc_preview = (
-                documents[idx][:60] + "..." if len(documents[idx]) > 60 else documents[idx]
-            )
-            click.echo(f"  {rank}. [{score:.4f}] {doc_preview}")
+            click.echo(f"--- Test {i} ---")
+            click.echo(f"Query: {query}")
+            click.echo("Ranked results:")
+            for rank, (idx, score) in enumerate(ranked, 1):
+                doc_preview = (
+                    documents[idx][:60] + "..." if len(documents[idx]) > 60 else documents[idx]
+                )
+                click.echo(f"  {rank}. [{score:.4f}] {doc_preview}")
+            click.echo()
+
+        click.echo("✓ All reranking tests passed!")
 
     except requests.RequestException as e:
         click.echo(f"Error connecting to server: {e}", err=True)
         sys.exit(1)
 
 
-@cli.command()
+@cli.command(name="check-guard-interactive")
 @click.option("--model", "-m", help="Guard model to use")
-def interactive(model: str | None) -> None:
+def check_guard_interactive(model: str | None) -> None:
     """Interactive content safety checking mode.
 
     Uses guard model from .env or --model flag.

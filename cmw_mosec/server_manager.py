@@ -37,13 +37,14 @@ def _ensure_pid_dir() -> None:
     PID_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _save_server_pid(pid: int, port: int) -> None:
+def _save_server_pid(pid: int, port: int, models: dict[str, str | None] | None = None) -> None:
     """Save server PID info."""
     _ensure_pid_dir()
     data = {
         "pid": pid,
         "port": port,
         "started_at": time.time(),
+        "models": models or {},
     }
     SERVER_PID_FILE.write_text(json.dumps(data))
 
@@ -588,7 +589,12 @@ class MosecServerManager:
             else:
                 process = subprocess.Popen(cmd, env=env)
 
-            _save_server_pid(process.pid, settings.server_port)
+            loaded_models = {
+                "embedding": emb_model,
+                "reranker": rer_model,
+                "guard": guard_m,
+            }
+            _save_server_pid(process.pid, settings.server_port, loaded_models)
 
             if background:
                 logger.info(f"Waiting for server on port {settings.server_port}...")
@@ -700,6 +706,11 @@ class MosecServerManager:
         Returns:
             Dict with embedding, reranker, guard -> model slug or None
         """
+        pid_info = _load_server_pid()
+        if pid_info and "models" in pid_info:
+            return pid_info["models"]
+
+        # Fallback to .env for compatibility
         active = load_active_models()
         return {
             "embedding": active["embedding"],
