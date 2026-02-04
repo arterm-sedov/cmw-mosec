@@ -152,9 +152,13 @@ class EmbeddingWorker(Worker):
         )
         inputs = encoded_input.to(self.device)
         with torch.no_grad():
-            # Use encoder only for T5-based models like FRIDA
-            model_output = self.model.encoder(**inputs)
-        # T5 doesn't have CLS token, use mean pooling instead
+            # Handle different model architectures
+            # T5 models have encoder attribute, others (BERT, Qwen) use the model directly
+            if hasattr(self.model, 'encoder'):
+                model_output = self.model.encoder(**inputs)
+            else:
+                model_output = self.model(**inputs)
+        # Use mean pooling (works for both T5 and BERT-based models)
         sentence_embeddings = self.mean_pooling(model_output, inputs["attention_mask"])
         sentence_embeddings = F.normalize(sentence_embeddings, p=2, dim=1)
         token_count = inputs["attention_mask"].sum(dim=1).tolist()[0]
@@ -165,7 +169,8 @@ class EmbeddingWorker(Worker):
         return EmbeddingRequest.from_bytes(data)
 
     def serialize(self, data: EmbeddingResponse) -> bytes:
-        return data.to_json().encode('utf-8')
+        # llmspec's to_json() already returns bytes
+        return data.to_json()
 
     def forward(self, data: EmbeddingRequest) -> EmbeddingResponse:
         if data.model != self.model_name:
