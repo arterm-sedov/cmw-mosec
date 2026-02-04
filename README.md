@@ -10,6 +10,15 @@ Chat with DeepWiki to get answers about this repo:
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/arterm-sedov/cmw-mosec)
 
+## Features
+
+- **Single Combined Server**: Run embedding, reranker, and guard models on one port
+- **Easy Setup**: One-command verification of dependencies and GPU detection
+- **Model Management**: Pre-configured models with optimal settings
+- **Server Management**: Start, stop, and monitor the combined server
+- **Interactive CLI**: Test content safety interactively or with one-off commands
+- **OpenAI-Compatible API**: Standard `/v1/` endpoints for embeddings, rerank, and moderate
+
 ## Installation
 
 ```bash
