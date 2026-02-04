@@ -51,6 +51,17 @@ TEST_RERANKER_CONFIG = get_active_config(TEST_RERANKER_SLUG)
 TEST_GUARD_CONFIG = get_active_config(TEST_GUARD_SLUG)
 
 
+def apply_prefix(text: str, prefix: str | None) -> str:
+    """Apply prefix to text if prefix is defined.
+
+    FRIDA uses prefixes like 'search_query:' and 'search_document:'
+    to understand the embedding task. Server does not add prefixes.
+    """
+    if prefix:
+        return f"{prefix}{text}"
+    return text
+
+
 def cleanup_test_servers():
     """Stop any running test servers and clean up PID files."""
     manager = MosecServerManager()
@@ -259,8 +270,9 @@ class TestRerankingAPI:
             f"http://localhost:{port}/v1/rerank",
             json={
                 "query": query,
-                "docs": documents,
+                "documents": documents,
                 "model": model_id,
+                "top_k": 3,
             },
             timeout=15.0,
         )
@@ -268,13 +280,12 @@ class TestRerankingAPI:
         assert response.status_code == 200
         data = response.json()
 
-        assert "results" in data
-        assert len(data["results"]) == len(documents)
+        assert "scores" in data
+        scores = data["scores"]
+        assert len(scores) == len(documents)
 
-        for result in data["results"]:
-            assert "index" in result
-            assert "score" in result
-            assert isinstance(result["score"], (int, float))
+        for score in scores:
+            assert isinstance(score, (int, float))
 
     def test_reranking_relevance_ordering(self, combined_server):
         """Test that reranking orders documents by relevance."""
@@ -293,8 +304,9 @@ class TestRerankingAPI:
             f"http://localhost:{port}/v1/rerank",
             json={
                 "query": query,
-                "docs": documents,
+                "documents": documents,
                 "model": model_id,
+                "top_k": 4,
             },
             timeout=15.0,
         )
@@ -302,12 +314,11 @@ class TestRerankingAPI:
         assert response.status_code == 200
         data = response.json()
 
-        results = data["results"]
-        scores = [r["score"] for r in results]
-
+        scores = data["scores"]
+        # Scores are in same order as input documents
         sorted_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
 
-        top_indices = [results[i]["index"] for i in sorted_indices[:2]]
+        top_indices = sorted_indices[:2]
         ai_related_indices = [1, 3]
 
         assert any(i in ai_related_indices for i in top_indices), (
@@ -364,14 +375,20 @@ class TestEmbeddingBehavior:
     """
 
     def test_embedding_dimension(self, combined_server):
-        """Test that embedding dimension matches expected for FRIDA (1024)."""
+        """Test that embedding dimension matches expected for FRIDA (1536)."""
         port = combined_server
         model_id = TEST_EMBEDDER_CONFIG.model_id
+
+        # Apply prefix client-side (FRIDA uses search_query: for queries)
+        test_text = apply_prefix(
+            "Test sentence for embedding dimension check.",
+            TEST_EMBEDDER_CONFIG.query_prefix
+        )
 
         response = requests.post(
             f"http://localhost:{port}/v1/embeddings",
             json={
-                "input": "Test sentence for embedding dimension check.",
+                "input": test_text,
                 "model": model_id,
             },
             timeout=15.0,
@@ -382,19 +399,26 @@ class TestEmbeddingBehavior:
 
         embedding = data["data"][0]["embedding"]
         dimension = len(embedding)
+        expected_dim = TEST_EMBEDDER_CONFIG.dimensions
 
-        assert 500 < dimension < 2000, f"Embedding dimension {dimension} unexpected for FRIDA"
-        assert dimension == 1024, f"FRIDA should have 1024 dimensions, got {dimension}"
+        assert 500 < dimension < 2000, f"Embedding dimension {dimension} unexpected"
+        assert dimension == expected_dim, f"Expected {expected_dim} dimensions, got {dimension}"
 
     def test_embedding_normalized(self, combined_server):
         """Test that embeddings are L2 normalized (L2 norm ≈ 1.0)."""
         port = combined_server
         model_id = TEST_EMBEDDER_CONFIG.model_id
 
+        # Apply prefix client-side
+        test_text = apply_prefix(
+            "Test sentence for normalization check.",
+            TEST_EMBEDDER_CONFIG.query_prefix
+        )
+
         response = requests.post(
             f"http://localhost:{port}/v1/embeddings",
             json={
-                "input": "Test sentence for normalization check.",
+                "input": test_text,
                 "model": model_id,
             },
             timeout=15.0,
@@ -412,7 +436,10 @@ class TestEmbeddingBehavior:
         """Test that same input produces consistent embeddings."""
         port = combined_server
         model_id = TEST_EMBEDDER_CONFIG.model_id
-        test_input = "Consistency test sentence."
+        test_input = apply_prefix(
+            "Consistency test sentence.",
+            TEST_EMBEDDER_CONFIG.query_prefix
+        )
 
         embeddings = []
         for _ in range(3):
@@ -451,14 +478,14 @@ class TestRerankerBehavior:
 
         response = requests.post(
             f"http://localhost:{port}/v1/rerank",
-            json={"query": query, "docs": documents, "model": model_id},
+            json={"query": query, "documents": documents, "model": model_id},
             timeout=15.0,
         )
 
         assert response.status_code == 200
         data = response.json()
 
-        scores = [r["score"] for r in data["results"]]
+        scores = data["scores"]
         for score in scores:
             assert -10 < score < 10, f"Score {score} out of expected range"
             assert isinstance(score, (int, float)), f"Score {score} not a number"
@@ -475,12 +502,12 @@ class TestRerankerBehavior:
         for _ in range(3):
             response = requests.post(
                 f"http://localhost:{port}/v1/rerank",
-                json={"query": query, "docs": documents, "model": model_id},
+                json={"query": query, "documents": documents, "model": model_id},
                 timeout=15.0,
             )
             assert response.status_code == 200
             data = response.json()
-            all_scores.append(tuple(r["score"] for r in data["results"]))
+            all_scores.append(tuple(data["scores"]))
 
         assert all_scores[0] == all_scores[1] == all_scores[2], "Reranker should be deterministic"
 
@@ -499,14 +526,14 @@ class TestRerankerBehavior:
 
         response = requests.post(
             f"http://localhost:{port}/v1/rerank",
-            json={"query": query, "docs": documents, "model": model_id},
+            json={"query": query, "documents": documents, "model": model_id},
             timeout=15.0,
         )
 
         assert response.status_code == 200
         data = response.json()
 
-        scores = [r["score"] for r in data["results"]]
+        scores = data["scores"]
         ai_doc_indices = [1, 3]
         ai_scores = [scores[i] for i in ai_doc_indices]
         non_ai_scores = [scores[i] for i in range(len(scores)) if i not in ai_doc_indices]

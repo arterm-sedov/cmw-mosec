@@ -145,7 +145,7 @@ class MosecModelConfig(BaseModel):
 
     model_id: str = Field(description="HuggingFace model ID")
     model_type: Literal["embedding", "reranker", "guard"] = Field(description="Model type")
-    port: int = Field(description="Server port (must be unique per model)")
+    port: int | None = Field(default=None, description="Server port (unused in combined server)")
     device: str = Field(default="auto", description="Device (auto/cpu/cuda)")
     dtype: Literal["float16", "float32", "bf16", "int8"] = Field(default="float16")
     batch_size: int = Field(default=32, description="Dynamic batching size")
@@ -154,13 +154,10 @@ class MosecModelConfig(BaseModel):
     max_new_tokens: int | None = Field(default=None, description="Max new tokens (guards only)")
     transformers_min_version: str | None = Field(default=None, description="Min transformers version")
     description: str | None = Field(default=None, description="Model description")
-
-    @field_validator("port", mode="before")
-    @classmethod
-    def validate_port_range(cls, v: int) -> int:
-        if not 7000 <= v <= 65535:
-            raise ValueError("Port must be between 7000-65535")
-        return v
+    # Embedding-specific fields
+    dimensions: int | None = Field(default=None, description="Embedding dimension")
+    query_prefix: str | None = Field(default=None, description="Query prefix (e.g., 'search_query: ')")
+    doc_prefix: str | None = Field(default=None, description="Document prefix (e.g., 'search_document: ')")
 
     @field_validator("workers", mode="before")
     @classmethod

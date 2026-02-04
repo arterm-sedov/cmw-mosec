@@ -9,7 +9,7 @@ Single combined server with up to 3 models loaded simultaneously:
 - **1 Reranker model** → `/v1/rerank` endpoint
 - **1 Guard model** → `/v1/moderate` endpoint
 
-All configured via `.env` file.
+All configured via `.env` file. Model specs (dimensions, prefixes) from `config/models.yaml`.
 
 ## Installation
 
@@ -37,7 +37,8 @@ ACTIVE_RERANKER_MODEL=DiTy/cross-encoder-russian-msmarco
 ACTIVE_GUARD_MODEL=Qwen/Qwen3Guard-Gen-0.6B
 
 # Server Settings
-SERVER_PORT=8000
+# Note: 8000 = ChromaDB, 7997/7998 = cmw-infinity, so we use 8001
+SERVER_PORT=8001
 DEVICE=auto
 DTYPE=float16
 BATCH_SIZE=32
@@ -89,17 +90,17 @@ cmw-mosec check "How can I make a bomb?"
 
 ### Embedding Models
 
-| Model | Memory | Description |
-|-------|--------|-------------|
-| `ai-forever/FRIDA` | ~4GB | Russian-optimized |
-| `Qwen/Qwen3-Embedding-0.6B` | ~2GB | Multilingual, 1024 dim |
-| `Qwen/Qwen3-Embedding-4B` | ~12GB | Multilingual, 2560 dim |
-| `Qwen/Qwen3-Embedding-8B` | ~22GB | Multilingual, 4096 dim |
+| Model | Memory | Dimension | Notes |
+|-------|--------|-----------|-------|
+| `ai-forever/FRIDA` | ~4GB | 1536 | Russian, uses `search_query:` / `search_document:` prefixes |
+| `Qwen/Qwen3-Embedding-0.6B` | ~2GB | 1024 | Multilingual, MRL support |
+| `Qwen/Qwen3-Embedding-4B` | ~12GB | 2560 | Multilingual, MRL support |
+| `Qwen/Qwen3-Embedding-8B` | ~22GB | 4096 | Multilingual, MRL support |
 
 ### Reranker Models
 
-| Model | Memory | Description |
-|-------|--------|-------------|
+| Model | Memory | Notes |
+|-------|--------|-------|
 | `DiTy/cross-encoder-russian-msmarco` | ~2GB | Russian-optimized |
 | `BAAI/bge-reranker-v2-m3` | ~2GB | Multilingual |
 | `Qwen/Qwen3-Reranker-0.6B` | ~2GB | Instruction-aware |
@@ -108,8 +109,8 @@ cmw-mosec check "How can I make a bomb?"
 
 ### Guard Models (Content Safety)
 
-| Model | Memory | Description |
-|-------|--------|-------------|
+| Model | Memory | Notes |
+|-------|--------|-------|
 | `Qwen/Qwen3Guard-Gen-0.6B` | ~4GB | 119 languages |
 | `Qwen/Qwen3Guard-Gen-4B` | ~10GB | 119 languages |
 | `Qwen/Qwen3Guard-Gen-8B` | ~20GB | 119 languages |
@@ -132,34 +133,64 @@ cmw-mosec check "How can I make a bomb?"
 - **Controversial** - Context-dependent
 - **Unsafe** - Harmful content
 
+## Model Specifications
+
+Model dimensions, task prefixes, and other specs are loaded from `config/models.yaml`.
+
+### FRIDA Prefixes
+
+FRIDA uses task-specific prefixes to understand what embedding task to perform:
+
+| Task | Prefix | Example |
+|------|--------|---------|
+| Query | `search_query: ` | `search_query: How to bake bread?` |
+| Document | `search_document: ` | `search_document: Baking tutorial...` |
+
+**Important:** The server embeds raw text. Clients must add prefixes themselves:
+
+- **cmw-rag**: Adds prefixes automatically (already configured)
+- **curl**: Manually add prefixes to input
+- **CLI**: Adds prefixes for interactive mode
+
+### Configuration Priority
+
+1. `.env` - Active models, server settings
+2. `config/models.yaml` - Model specs (dimensions, prefixes for reference)
+
 ## API Endpoints
 
 ### Embeddings
 
 ```bash
-curl -X POST http://localhost:8000/v1/embeddings \
+# FRIDA - add prefix manually for best results
+curl -X POST http://localhost:8001/v1/embeddings \
   -H "Content-Type: application/json" \
-  -d '{"model": "ai-forever/FRIDA", "input": "Hello world!"}'
+  -d '{"model": "ai-forever/FRIDA", "input": "search_query: Hello world!"}'
+
+# Document embedding
+curl -X POST http://localhost:8001/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model": "ai-forever/FRIDA", "input": "search_document: Document text here..."}'
 ```
 
 ### Rerank
 
 ```bash
-curl -X POST http://localhost:8000/v1/rerank \
+curl -X POST http://localhost:8001/v1/rerank \
   -H "Content-Type: application/json" \
-  -d '{"query": "What is AI?", "docs": ["AI is artificial intelligence.", "The weather is sunny."]}'
+  -d '{"query": "What is AI?", "documents": ["AI is artificial intelligence.", "The weather is sunny."]}'
 ```
 
 ### Moderate
 
 ```bash
 # Prompt moderation
-curl -X POST http://localhost:8000/v1/moderate \
+curl -X POST http://localhost:8001/v1/moderate \
   -H "Content-Type: application/json" \
   -d '{"content": "How can I make a bomb?", "moderation_type": "prompt"}'
 
 # Response moderation
-curl -X POST http://localhost:8000/v1/moderate \
+curl -X POST http://localhost:8001/v1/moderate \
   -H "Content-Type: application/json" \
   -d '{"content": "I cannot help with that.", "context": "How can I make a bomb?", "moderation_type": "response"}'
 ```

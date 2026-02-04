@@ -141,9 +141,13 @@ class EmbeddingWorker(Worker):
         """
         return model_output[0][:, 0, :]
 
-    def get_embeddings(self, sentences: Union[str, List[Union[str, List[int]]]]]):
+    def get_embeddings(self, texts: Union[str, List[Union[str, List[int]]]]]):
+        # Handle both single string and list of strings
+        if isinstance(texts, str):
+            texts = [texts]
+
         encoded_input = self.tokenizer(
-            sentences, padding=True, truncation=True, return_tensors="pt"
+            texts, padding=True, truncation=True, return_tensors="pt"
         )
         inputs = encoded_input.to(self.device)
         with torch.no_grad():
@@ -192,37 +196,37 @@ class EmbeddingWorker(Worker):
     # Reranker worker
     if reranker_model:
         reranker_code = f'''
+import json
 import os
-from typing import List
+from typing import Any
 
-from msgspec import Struct
 from sentence_transformers import CrossEncoder
 from mosec import Worker
-from mosec.mixin import TypedMsgPackMixin
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 RERANKER_MODEL = "{reranker_model}"
 
 
-class RerankRequest(Struct, kw_only=True):
-    query: str
-    docs: List[str]
-
-
-class RerankResponse(Struct, kw_only=True):
-    scores: List[float]
-
-
-class RerankerWorker(TypedMsgPackMixin, Worker):
+class RerankerWorker(Worker):
     def __init__(self):
         self.model_name = RERANKER_MODEL
         self.model = CrossEncoder(self.model_name)
 
-    def forward(self, data: RerankRequest) -> RerankResponse:
-        scores = self.model.predict([[data.query, doc] for doc in data.docs])
-        return RerankResponse(scores=scores.tolist())
-'''
+    def deserialize(self, data: bytes) -> dict[str, Any]:
+        return json.loads(data.decode("utf-8"))
+
+    def serialize(self, data: dict[str, Any]) -> bytes:
+        return json.dumps(data).encode("utf-8")
+
+    def forward(self, data: dict[str, Any]) -> dict[str, Any]:
+        query = data["query"]
+        # Accept both "docs" and "documents" field names
+        docs = data.get("docs") or data.get("documents")
+        # top_k is optional - return all scores, client can slice
+        scores = self.model.predict([[query, doc] for doc in docs])
+        return {"scores": scores.tolist()}
+ '''
 
     # Guard worker
     if guard_model:
