@@ -2,6 +2,14 @@
 
 Combined Mosec server for embedding, reranker, and content safety guard inference.
 
+## AI-Enabled Repo
+
+Chat with DeepWiki to get answers about this repo:
+
+[Ask DeepWiki](https://deepwiki.com/arterm-sedov/cmw-mosec)
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/arterm-sedov/cmw-mosec)
+
 ## Architecture
 
 Single combined server with up to 3 models loaded simultaneously:
