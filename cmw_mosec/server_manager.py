@@ -74,9 +74,9 @@ def _is_process_running(pid: int) -> bool:
 
 
 def _check_server_health(port: int, timeout: float = 2.0) -> bool:
-    """Check if Mosec server is responding."""
+    """Check if Mosec server is responding (using metrics endpoint)."""
     try:
-        response = requests.get(f"http://localhost:{port}/health", timeout=timeout)
+        response = requests.get(f"http://localhost:{port}/metrics", timeout=timeout)
         return response.status_code == 200
     except requests.RequestException:
         return False
@@ -96,6 +96,7 @@ def _generate_server_script(
     # Embedding worker
     if embedding_model:
         embedder_code = f'''
+import base64
 import os
 from typing import List, Union
 
@@ -141,7 +142,7 @@ class EmbeddingWorker(Worker):
         """
         return model_output[0][:, 0, :]
 
-    def get_embeddings(self, texts: Union[str, List[Union[str, List[int]]]]]):
+    def get_embeddings(self, texts: Union[str, List[Union[str, List[int]]]]):
         # Handle both single string and list of strings
         if isinstance(texts, str):
             texts = [texts]
@@ -151,17 +152,20 @@ class EmbeddingWorker(Worker):
         )
         inputs = encoded_input.to(self.device)
         with torch.no_grad():
-            model_output = self.model(**inputs)
-        sentence_embeddings = self.cls_pooling(model_output)
+            # Use encoder only for T5-based models like FRIDA
+            model_output = self.model.encoder(**inputs)
+        # T5 doesn't have CLS token, use mean pooling instead
+        sentence_embeddings = self.mean_pooling(model_output, inputs["attention_mask"])
         sentence_embeddings = F.normalize(sentence_embeddings, p=2, dim=1)
         token_count = inputs["attention_mask"].sum(dim=1).tolist()[0]
         return token_count, sentence_embeddings
 
     def deserialize(self, data: bytes) -> EmbeddingRequest:
+        # llmspec expects JSON format
         return EmbeddingRequest.from_bytes(data)
 
     def serialize(self, data: EmbeddingResponse) -> bytes:
-        return data.to_json()
+        return data.to_json().encode('utf-8')
 
     def forward(self, data: EmbeddingRequest) -> EmbeddingResponse:
         if data.model != self.model_name:
@@ -225,7 +229,7 @@ class RerankerWorker(Worker):
         docs = data.get("docs") or data.get("documents")
         # top_k is optional - return all scores, client can slice
         scores = self.model.predict([[query, doc] for doc in docs])
-        return {"scores": scores.tolist()}
+        return {{"scores": scores.tolist()}}
  '''
 
     # Guard worker
@@ -300,7 +304,7 @@ class GuardWorker(TypedMsgPackMixin, Worker):
         )
         category_pattern = "|".join(re.escape(cat) for cat in SAFETY_CATEGORIES)
         # ruff: noqa: F821
-        self.category_pattern = re.compile(f"({category_pattern})", re.IGNORECASE)
+        self.category_pattern = re.compile(f"({{category_pattern}})", re.IGNORECASE)
         self.refusal_pattern = re.compile(r"Refusal:\\s*(Yes|No)", re.IGNORECASE)
 
     def _format_prompt(self, content: str, context: Optional[str], moderation_type: str) -> str:
@@ -386,7 +390,7 @@ class GuardWorker(TypedMsgPackMixin, Worker):
         )
 '''
 
-    return f'''
+    return f"""
 import os
 import sys
 
@@ -401,22 +405,28 @@ PORT = {settings.server_port}
 if __name__ == "__main__":
     server = Server()
 
+    routes = {{}}
+
     # Register embedding endpoint
     if "EmbeddingWorker" in globals():
-        from mosec import Runtime
         emb = Runtime(EmbeddingWorker)
-        server.register_runtime({{"/v1/embeddings": [emb], "/embeddings": [emb]}})
+        routes["/v1/embeddings"] = [emb]
+        routes["/embeddings"] = [emb]
 
     # Register reranker endpoint
     if "RerankerWorker" in globals():
-        server.register_runtime({{"/v1/rerank": [Runtime(RerankerWorker)], "/rerank": [Runtime(RerankerWorker)]}})
+        routes["/v1/rerank"] = [Runtime(RerankerWorker)]
+        routes["/rerank"] = [Runtime(RerankerWorker)]
 
     # Register guard endpoint
     if "GuardWorker" in globals():
-        server.register_runtime({{"/v1/moderate": [Runtime(GuardWorker)], "/moderate": [Runtime(GuardWorker)]}})
+        routes["/v1/moderate"] = [Runtime(GuardWorker)]
+        routes["/moderate"] = [Runtime(GuardWorker)]
 
-    server.run(host="0.0.0.0", port=PORT)
-'''
+    server.register_runtime(routes)
+
+    server.run()
+"""
 
 
 class MosecServerManager:
@@ -424,6 +434,8 @@ class MosecServerManager:
 
     def __init__(self):
         self.pid_dir = PID_DIR
+        self._script_dir = PID_DIR / "scripts"
+        self._script_dir.mkdir(parents=True, exist_ok=True)
 
     def get_status(self) -> ServerStatus:
         """Get status of the combined server."""
@@ -501,16 +513,17 @@ class MosecServerManager:
             logger.error(f"Failed to load settings: {e}")
             return False, ["settings"]
 
-        # Use active models from .env if not specified
-        active = load_active_models()
-        emb_model = embedding_model or active["embedding"]
-        rer_model = reranker_model or active["reranker"]
-        guard_m = guard_model or active["guard"]
+        # cli.py passes None when a model is not specified
+        # If None, don't load that model (no fallback to .env)
+        emb_model = embedding_model
+        rer_model = reranker_model
+        guard_m = guard_model
 
         failed_models = []
 
         # Validate models exist
         from .server_config import ModelRegistry
+
         registry = ModelRegistry()
 
         if emb_model:
@@ -541,10 +554,20 @@ class MosecServerManager:
             logger.error("No valid models to load")
             return False, failed_models
 
-        logger.info(f"Starting server with models: emb={emb_model}, rer={rer_model}, guard={guard_m}")
+        logger.info(
+            f"Starting server with models: emb={emb_model}, rer={rer_model}, guard={guard_m}"
+        )
 
         server_script = _generate_server_script(settings, emb_model, rer_model, guard_m)
-        cmd = [sys.executable, "-c", server_script]
+        script_path = self._script_dir / f"mosec_server_{settings.server_port}.py"
+        with open(script_path, "w") as f:
+            f.write(server_script)
+        cmd = [sys.executable, str(script_path), "--port", str(settings.server_port)]
+        env = os.environ.copy()
+
+        # Pass HF_TOKEN to subprocess if set
+        if settings.hf_token:
+            env["HF_TOKEN"] = settings.hf_token
 
         try:
             if background:
@@ -553,9 +576,10 @@ class MosecServerManager:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
+                    env=env,
                 )
             else:
-                process = subprocess.Popen(cmd)
+                process = subprocess.Popen(cmd, env=env)
 
             _save_server_pid(process.pid, settings.server_port)
 

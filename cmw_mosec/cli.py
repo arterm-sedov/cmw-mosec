@@ -78,11 +78,14 @@ def setup() -> None:
 
 @cli.command()
 @click.option("--foreground", "-f", is_flag=True, help="Run in foreground (don't detach)")
-def serve(foreground: bool) -> None:
-    """Start the combined Mosec server with models from .env.
+@click.option("--embedding", help="Embedding model to load")
+@click.option("--reranker", help="Reranker model to load")
+@click.option("--guard", help="Guard model to load")
+def serve(foreground: bool, embedding: str, reranker: str, guard: str) -> None:
+    """Start the combined Mosec server.
 
-    Models are loaded from ACTIVE_EMBEDDING_MODEL, ACTIVE_RERANKER_MODEL,
-    and ACTIVE_GUARD_MODEL environment variables.
+    Models are loaded from .env by default, or use --embedding/--reranker/--guard
+    to override specific models.
     """
     manager = MosecServerManager()
 
@@ -93,15 +96,28 @@ def serve(foreground: bool) -> None:
 
     active = load_active_models()
 
+    # If no model flags are passed, load all from .env
+    # If any model flag is passed, only load the specified ones (no fallback)
+    if embedding is None and reranker is None and guard is None:
+        # No flags - use all from .env
+        emb_model = active.get("embedding")
+        rer_model = active.get("reranker")
+        guard_model = active.get("guard")
+    else:
+        # Some flags passed - use them, don't load unspecified models
+        emb_model = embedding
+        rer_model = reranker
+        guard_model = guard
+
     click.echo("Starting combined Mosec server...")
-    click.echo(f"  Embedding: {active['embedding'] or 'not configured'}")
-    click.echo(f"  Reranker: {active['reranker'] or 'not configured'}")
-    click.echo(f"  Guard: {active['guard'] or 'not configured'}")
+    click.echo(f"  Embedding: {emb_model or 'not configured'}")
+    click.echo(f"  Reranker: {rer_model or 'not configured'}")
+    click.echo(f"  Guard: {guard_model or 'not configured'}")
 
     success, failed = manager.start(
-        embedding_model=active.get("embedding"),
-        reranker_model=active.get("reranker"),
-        guard_model=active.get("guard"),
+        embedding_model=emb_model,
+        reranker_model=rer_model,
+        guard_model=guard_model,
         background=not foreground,
     )
 
@@ -111,11 +127,11 @@ def serve(foreground: bool) -> None:
         if failed:
             click.echo(f"⚠ Failed to load: {', '.join(failed)}")
         click.echo("\nEndpoints:")
-        if active.get("embedding"):
+        if emb_model:
             click.echo("  POST /v1/embeddings - Embeddings API")
-        if active.get("reranker"):
+        if rer_model:
             click.echo("  POST /v1/rerank - Reranking API")
-        if active.get("guard"):
+        if guard_model:
             click.echo("  POST /v1/moderate - Content moderation API")
     else:
         click.echo("\n✗ Failed to start server", err=True)
@@ -196,7 +212,11 @@ def status() -> None:
         return
 
     click.echo(f"✓ Server running on port {status.port}")
-    click.echo(f"  Uptime: {status.uptime_seconds or 0:.0f}s" if status.uptime_seconds else "  Uptime: unknown")
+    click.echo(
+        f"  Uptime: {status.uptime_seconds or 0:.0f}s"
+        if status.uptime_seconds
+        else "  Uptime: unknown"
+    )
 
     loaded = manager.list_loaded_models()
     click.echo("\nLoaded models:")
@@ -316,9 +336,12 @@ def check(text: str, model: str | None, mod_type: str, context: str | None) -> N
 
 
 @cli.command()
-@click.option("--model", "-m", help="Guard model to use (from .env if not specified)")
+@click.option("--model", "-m", help="Guard model to use")
 def interactive(model: str | None) -> None:
-    """Interactive content safety checking mode."""
+    """Interactive content safety checking mode.
+
+    Uses guard model from .env or --model flag.
+    """
     manager = MosecServerManager()
 
     active = load_active_models()
@@ -332,8 +355,8 @@ def interactive(model: str | None) -> None:
     if not manager.is_running():
         click.echo("Starting server...")
         success, _ = manager.start(
-            embedding_model=active.get("embedding"),
-            reranker_model=active.get("reranker"),
+            embedding_model=None,
+            reranker_model=None,
             guard_model=guard_model,
             background=False,
         )

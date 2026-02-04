@@ -28,6 +28,9 @@ class ServerSettings(BaseModel):
     batch_size: int = Field(description="Default batch size")
     idle_timeout: int = Field(description="Idle timeout in seconds (0=disabled)")
     log_level: str = Field(description="Log level (DEBUG/INFO/WARNING/ERROR)")
+    hf_token: str | None = Field(
+        default=None, description="HuggingFace API token for model downloads"
+    )
 
     @field_validator("server_port")
     @classmethod
@@ -61,8 +64,7 @@ def load_server_settings() -> ServerSettings:
 
     if not env_path.exists():
         raise FileNotFoundError(
-            f".env file not found at {env_path}. "
-            "Copy .env-example to .env and configure."
+            f".env file not found at {env_path}. Copy .env-example to .env and configure."
         )
 
     raw_values = dotenv_values(env_path)
@@ -80,6 +82,10 @@ def load_server_settings() -> ServerSettings:
         except ValueError as err:
             raise ValueError(f"{key} must be a valid integer, got: {val}") from err
 
+    def get_optional(raw: dict[str, Any], key: str) -> str | None:
+        val = raw.get(key)
+        return str(val) if val else None
+
     return ServerSettings(
         server_port=get_required_int(raw_values, "SERVER_PORT"),
         device=get_required(raw_values, "DEVICE"),
@@ -87,6 +93,7 @@ def load_server_settings() -> ServerSettings:
         batch_size=get_required_int(raw_values, "BATCH_SIZE"),
         idle_timeout=get_required_int(raw_values, "IDLE_TIMEOUT"),
         log_level=get_required(raw_values, "LOG_LEVEL"),
+        hf_token=get_optional(raw_values, "HF_TOKEN"),
     )
 
 
@@ -103,8 +110,7 @@ def load_active_models() -> dict[str, str]:
 
     if not env_path.exists():
         raise FileNotFoundError(
-            f".env file not found at {env_path}. "
-            "Copy .env-example to .env and configure."
+            f".env file not found at {env_path}. Copy .env-example to .env and configure."
         )
 
     raw_values = dotenv_values(env_path)
@@ -152,12 +158,18 @@ class MosecModelConfig(BaseModel):
     memory_gb: float = Field(description="Estimated VRAM usage in GB")
     workers: int = Field(default=1, description="Number of Mosec workers")
     max_new_tokens: int | None = Field(default=None, description="Max new tokens (guards only)")
-    transformers_min_version: str | None = Field(default=None, description="Min transformers version")
+    transformers_min_version: str | None = Field(
+        default=None, description="Min transformers version"
+    )
     description: str | None = Field(default=None, description="Model description")
     # Embedding-specific fields
     dimensions: int | None = Field(default=None, description="Embedding dimension")
-    query_prefix: str | None = Field(default=None, description="Query prefix (e.g., 'search_query: ')")
-    doc_prefix: str | None = Field(default=None, description="Document prefix (e.g., 'search_document: ')")
+    query_prefix: str | None = Field(
+        default=None, description="Query prefix (e.g., 'search_query: ')"
+    )
+    doc_prefix: str | None = Field(
+        default=None, description="Document prefix (e.g., 'search_document: ')"
+    )
 
     @field_validator("workers", mode="before")
     @classmethod
@@ -250,9 +262,7 @@ class ModelRegistry:
 
     def _to_config(self, data: dict[str, Any]) -> MosecModelConfig:
         """Build MosecModelConfig from registry dict (exclude canonical_slug)."""
-        return MosecModelConfig(
-            **{k: v for k, v in data.items() if k != "canonical_slug"}
-        )
+        return MosecModelConfig(**{k: v for k, v in data.items() if k != "canonical_slug"})
 
     def get_embedding_config(self, model_slug: str) -> MosecModelConfig:
         """Get configuration for an embedding model (case-insensitive)."""
@@ -288,9 +298,9 @@ class ModelRegistry:
         if normalized in self._guards:
             return self._to_config(self._guards[normalized])
         available = (
-            [m["canonical_slug"] for m in self._embeddings.values()] +
-            [m["canonical_slug"] for m in self._rerankers.values()] +
-            [m["canonical_slug"] for m in self._guards.values()]
+            [m["canonical_slug"] for m in self._embeddings.values()]
+            + [m["canonical_slug"] for m in self._rerankers.values()]
+            + [m["canonical_slug"] for m in self._guards.values()]
         )
         raise ValueError(f"Unknown model: {model_slug}. Available: {available}")
 
