@@ -89,9 +89,19 @@ def _generate_server_script(
     guard_model: str | None,
 ) -> str:
     """Generate the combined Mosec server script."""
+    from .server_config import ModelRegistry
+
     embedder_code = ""
     reranker_code = ""
     guard_code = ""
+
+    guard_max_new_tokens = 128
+    if guard_model:
+        try:
+            guard_config = ModelRegistry().get_guard_config(guard_model)
+            guard_max_new_tokens = guard_config.max_new_tokens or 128
+        except ValueError:
+            guard_max_new_tokens = 128
 
     # Embedding worker
     if embedding_model:
@@ -240,6 +250,7 @@ class RerankerWorker(Worker):
     # Guard worker
     if guard_model:
         guard_code = f'''
+import json
 import os
 import re
 from typing import List, Optional
@@ -247,14 +258,12 @@ from typing import List, Optional
 import torch
 import transformers
 from mosec import Worker
-from mosec.mixin import TypedMsgPackMixin
-from msgspec import Struct
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 GUARD_MODEL = "{guard_model}"
 DTYPE = "{settings.dtype}"
-MAX_NEW_TOKENS = {settings.idle_timeout}
+MAX_NEW_TOKENS = {guard_max_new_tokens}
 
 SAFETY_CATEGORIES = [
     "Violent",
@@ -271,22 +280,7 @@ SAFETY_CATEGORIES = [
 SAFETY_CATEGORY_PATTERN = "|".join(re.escape(cat) for cat in SAFETY_CATEGORIES)
 
 
-class GuardRequest(Struct, kw_only=True):
-    content: str
-    context: Optional[str] = None
-    moderation_type: str = "prompt"
-
-
-class GuardResponse(Struct, kw_only=True):
-    safety_level: str
-    categories: List[str]
-    refusal: Optional[str] = None
-    is_safe: bool
-    raw_output: str
-    model: str = GUARD_MODEL
-
-
-class GuardWorker(TypedMsgPackMixin, Worker):
+class GuardWorker(Worker):
     def __init__(self):
         self.model_name = GUARD_MODEL
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(
@@ -295,12 +289,18 @@ class GuardWorker(TypedMsgPackMixin, Worker):
         )
         self.model = transformers.AutoModelForCausalLM.from_pretrained(
             self.model_name,
-            torch_dtype=torch.float16 if DTYPE == "float16" else torch.bfloat16,
+            dtype=torch.float16 if DTYPE == "float16" else torch.bfloat16,
             device_map="auto" if torch.cuda.is_available() else None,
             trust_remote_code=True
         )
         self.model.eval()
         self._compile_patterns()
+
+    def deserialize(self, data: bytes) -> dict:
+        return json.loads(data.decode('utf-8'))
+
+    def serialize(self, data: dict) -> bytes:
+        return json.dumps(data).encode('utf-8')
 
     def _compile_patterns(self):
         self.safety_pattern = re.compile(
@@ -358,8 +358,9 @@ class GuardWorker(TypedMsgPackMixin, Worker):
 
         return result
 
-    def forward(self, data: GuardRequest) -> GuardResponse:
-        prompt = self._format_prompt(data.content, data.context, data.moderation_type)
+    def forward(self, data: dict) -> dict:
+        content = data.get("content") or data.get("input", "")
+        prompt = self._format_prompt(content, data.get("context"), data.get("moderation_type", "prompt"))
 
         model_inputs = self.tokenizer(
             [prompt],
@@ -386,13 +387,14 @@ class GuardWorker(TypedMsgPackMixin, Worker):
 
         parsed = self._parse_output(output_text)
 
-        return GuardResponse(
-            safety_level=parsed["safety_level"],
-            categories=parsed["categories"],
-            refusal=parsed.get("refusal"),
-            is_safe=parsed["safety_level"] == "Safe",
-            raw_output=parsed["raw_output"],
-        )
+        return {{
+            "safety_level": parsed["safety_level"],
+            "categories": parsed["categories"],
+            "refusal": parsed.get("refusal"),
+            "is_safe": parsed["safety_level"] == "Safe",
+            "raw_output": parsed["raw_output"],
+            "model": self.model_name,
+        }}
 '''
 
     return f"""

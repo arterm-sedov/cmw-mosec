@@ -49,3 +49,8 @@ Thumbs.db
 # PID files (runtime)
 *.pid
 .venv-wsl/**
+
+# Environment files (contains secrets)
+.env
+.env.local
+.env.*.local
