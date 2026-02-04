@@ -336,6 +336,115 @@ def check(text: str, model: str | None, mod_type: str, context: str | None) -> N
 
 
 @cli.command()
+@click.argument("text")
+@click.option("--model", "-m", help="Embedding model to use (from .env if not specified)")
+def embed(text: str, model: str | None) -> None:
+    """Get embeddings for text (requires running server)."""
+    manager = MosecServerManager()
+
+    if not manager.is_running():
+        click.echo("Error: Server is not running", err=True)
+        click.echo("Start with: cmw-mosec serve")
+        sys.exit(1)
+
+    active = load_active_models()
+    embedding_model = model or active.get("embedding")
+
+    if not embedding_model:
+        click.echo("Error: No embedding model configured", err=True)
+        click.echo("Set ACTIVE_EMBEDDING_MODEL in .env")
+        sys.exit(1)
+
+    status = manager.get_status()
+    endpoint = f"http://localhost:{status.port}/v1/embeddings"
+
+    click.echo(f"Embedding with {embedding_model} at {endpoint}...")
+    click.echo()
+
+    try:
+        response = requests.post(
+            endpoint,
+            json={"input": text, "model": embedding_model},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        embedding = result["data"][0]["embedding"]
+        dimension = len(embedding)
+        usage = result.get("usage", {})
+
+        click.echo(f"Dimension: {dimension}")
+        click.echo(f"Prompt tokens: {usage.get('prompt_tokens', 'N/A')}")
+        click.echo(f"Total tokens: {usage.get('total_tokens', 'N/A')}")
+        click.echo("\nEmbedding (first 10 values):")
+        click.echo(f"  {embedding[:10]}")
+        if dimension > 10:
+            click.echo(f"  ... ({dimension - 10} more values)")
+
+    except requests.RequestException as e:
+        click.echo(f"Error connecting to server: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("query")
+@click.argument("documents", nargs=-1, required=True)
+@click.option("--model", "-m", help="Reranker model to use (from .env if not specified)")
+@click.option("--top-k", type=int, help="Show top K results")
+def rerank(query: str, documents: tuple[str, ...], model: str | None, top_k: int | None) -> None:
+    """Rerank documents for a query (requires running server)."""
+    manager = MosecServerManager()
+
+    if not manager.is_running():
+        click.echo("Error: Server is not running", err=True)
+        click.echo("Start with: cmw-mosec serve")
+        sys.exit(1)
+
+    active = load_active_models()
+    reranker_model = model or active.get("reranker")
+
+    if not reranker_model:
+        click.echo("Error: No reranker model configured", err=True)
+        click.echo("Set ACTIVE_RERANKER_MODEL in .env")
+        sys.exit(1)
+
+    status = manager.get_status()
+    endpoint = f"http://localhost:{status.port}/v1/rerank"
+
+    click.echo(f"Reranking with {reranker_model} at {endpoint}...")
+    click.echo(f"Query: {query}")
+    click.echo()
+
+    try:
+        response = requests.post(
+            endpoint,
+            json={"query": query, "documents": list(documents)},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        scores = result["scores"]
+
+        if top_k:
+            ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:top_k]
+        else:
+            ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+
+        click.echo("Ranked results:")
+        for rank, (idx, score) in enumerate(ranked, 1):
+            doc_preview = (
+                documents[idx][:60] + "..." if len(documents[idx]) > 60 else documents[idx]
+            )
+            click.echo(f"  {rank}. [{score:.4f}] {doc_preview}")
+
+    except requests.RequestException as e:
+        click.echo(f"Error connecting to server: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
 @click.option("--model", "-m", help="Guard model to use")
 def interactive(model: str | None) -> None:
     """Interactive content safety checking mode.
