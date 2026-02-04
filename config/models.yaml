@@ -1,31 +1,34 @@
 # Server configuration for cmw-mosec package
-# Model slugs with HuggingFace format (case-insensitive lookup)
-# Port ranges by type:
-#   - Embedding models: 8001-8099
-#   - Reranker models: 8100-8199
-#   - Guard models: 8200-8299
+# Model specifications for embedding, reranker, and guard models.
+# Server port is configured in .env (SERVER_PORT), not here.
+#
+# All models run on a single server with different endpoints:
+#   - /v1/embeddings → Embedding model
+#   - /v1/rerank     → Reranker model
+#   - /v1/moderate   → Guard model
 
 ################################################################################
 # EMBEDDING MODELS
-# Ports: 8001-8099
 # API: OpenAI-compatible /v1/embeddings
 ################################################################################
 
 embedding_models:
-  # FRIDA - Russian embedding model (1024 dim, 32K context)
+  # FRIDA - Russian embedding model (1536 dim, 32K context)
+  # Uses search_query: and search_document: prefixes per HuggingFace docs
   ai-forever/FRIDA:
     model_id: ai-forever/FRIDA
-    port: 8001
     dtype: float16
     batch_size: 16
     memory_gb: 4.0
     workers: 1
-    description: "Russian-optimized embedding, 1024 dimensions"
+    dimensions: 1536
+    query_prefix: "search_query: "
+    doc_prefix: "search_document: "
+    description: "Russian-optimized embedding, 1536 dimensions"
 
   # Qwen3 Embedding Series (multilingual, 119+ languages)
   Qwen/Qwen3-Embedding-0.6B:
     model_id: Qwen/Qwen3-Embedding-0.6B
-    port: 8002
     dtype: float16
     batch_size: 16
     memory_gb: 2.0
@@ -34,7 +37,6 @@ embedding_models:
 
   Qwen/Qwen3-Embedding-4B:
     model_id: Qwen/Qwen3-Embedding-4B
-    port: 8003
     dtype: float16
     batch_size: 16
     memory_gb: 12.0
@@ -43,7 +45,6 @@ embedding_models:
 
   Qwen/Qwen3-Embedding-8B:
     model_id: Qwen/Qwen3-Embedding-8B
-    port: 8004
     dtype: float16
     batch_size: 8
     memory_gb: 22.0
@@ -52,15 +53,13 @@ embedding_models:
 
 ################################################################################
 # RERANKER MODELS
-# Ports: 8100-8199
-# API: msgpack /inference or OpenAI-compatible /v1/rerank
+# API: OpenAI-compatible /v1/rerank
 ################################################################################
 
 reranker_models:
   # DiTy CrossEncoder - Russian optimized
   DiTy/cross-encoder-russian-msmarco:
     model_id: DiTy/cross-encoder-russian-msmarco
-    port: 8110
     dtype: float16
     batch_size: 32
     memory_gb: 2.0
@@ -70,7 +69,6 @@ reranker_models:
   # BGE Reranker - Multilingual
   BAAI/bge-reranker-v2-m3:
     model_id: BAAI/bge-reranker-v2-m3
-    port: 8111
     dtype: float16
     batch_size: 32
     memory_gb: 2.0
@@ -80,7 +78,6 @@ reranker_models:
   # Qwen3 Reranker Series (multilingual, 119+ languages)
   Qwen/Qwen3-Reranker-0.6B:
     model_id: Qwen/Qwen3-Reranker-0.6B
-    port: 8112
     dtype: float16
     batch_size: 32
     memory_gb: 2.0
@@ -89,7 +86,6 @@ reranker_models:
 
   Qwen/Qwen3-Reranker-4B:
     model_id: Qwen/Qwen3-Reranker-4B
-    port: 8113
     dtype: float16
     batch_size: 16
     memory_gb: 12.0
@@ -98,7 +94,6 @@ reranker_models:
 
   Qwen/Qwen3-Reranker-8B:
     model_id: Qwen/Qwen3-Reranker-8B
-    port: 8114
     dtype: float16
     batch_size: 8
     memory_gb: 22.0
@@ -107,8 +102,7 @@ reranker_models:
 
 ################################################################################
 # GUARD MODELS
-# Ports: 8200-8299
-# API: OpenAI-compatible /v1/moderations
+# API: OpenAI-compatible /v1/moderate
 # Output format: Safety: Safe|Controversial|Unsafe, Categories: ..., Refusal: Yes|No
 ################################################################################
 
@@ -121,7 +115,6 @@ guard_models:
 
   Qwen/Qwen3Guard-Gen-0.6B:
     model_id: Qwen/Qwen3Guard-Gen-0.6B
-    port: 8220
     dtype: bf16
     batch_size: 4
     memory_gb: 4.0
@@ -132,7 +125,6 @@ guard_models:
 
   Qwen/Qwen3Guard-Gen-4B:
     model_id: Qwen/Qwen3Guard-Gen-4B
-    port: 8221
     dtype: bf16
     batch_size: 4
     memory_gb: 10.0
@@ -143,7 +135,6 @@ guard_models:
 
   Qwen/Qwen3Guard-Gen-8B:
     model_id: Qwen/Qwen3Guard-Gen-8B
-    port: 8222
     dtype: bf16
     batch_size: 2
     memory_gb: 20.0

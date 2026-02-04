@@ -1,6 +1,6 @@
 """Integration tests for cmw-mosec with real inference.
 
-These tests start actual Mosec servers and test real embedding/reranking/guard.
+These tests start the combined Mosec server and test real embedding/reranking/guard.
 They use small models and device='auto' to work on both CPU and GPU.
 """
 
@@ -12,44 +12,61 @@ import time
 import pytest
 import requests
 
-from cmw_mosec.server_config import MosecModelConfig
+from cmw_mosec.server_config import (
+    ModelRegistry,
+    load_active_models,
+    load_server_settings,
+)
 from cmw_mosec.server_manager import (
     MosecServerManager,
     _check_server_health,
-    _remove_pid_file,
+    _remove_server_pid,
 )
 
-TEST_EMBEDDING_CONFIG = MosecModelConfig(
-    model_id="sentence-transformers/all-MiniLM-L6-v2",
-    model_type="embedding",
-    port=9001,
-    device="auto",
-    dtype="float32",
-    batch_size=8,
-    memory_gb=0.5,
-    workers=1,
-)
 
-TEST_RERANKER_CONFIG = MosecModelConfig(
-    model_id="cross-encoder/ms-marco-MiniLM-L-2-v2",
-    model_type="reranker",
-    port=9002,
-    device="auto",
-    dtype="float32",
-    batch_size=8,
-    memory_gb=0.5,
-    workers=1,
-)
+def get_active_config(model_slug: str):
+    """Get the MosecModelConfig for an active model."""
+    registry = ModelRegistry()
+    model_type = registry.get_model_type(model_slug)
+    if model_type == "embedding":
+        return registry.get_embedding_config(model_slug)
+    elif model_type == "reranker":
+        return registry.get_reranker_config(model_slug)
+    elif model_type == "guard":
+        return registry.get_guard_config(model_slug)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
+
+SETTINGS = load_server_settings()
+ACTIVE_MODELS = load_active_models()
+
+TEST_PORT = SETTINGS.server_port
+TEST_EMBEDDER_SLUG = ACTIVE_MODELS["embedding"]
+TEST_RERANKER_SLUG = ACTIVE_MODELS["reranker"]
+TEST_GUARD_SLUG = ACTIVE_MODELS["guard"]
+
+TEST_EMBEDDER_CONFIG = get_active_config(TEST_EMBEDDER_SLUG)
+TEST_RERANKER_CONFIG = get_active_config(TEST_RERANKER_SLUG)
+TEST_GUARD_CONFIG = get_active_config(TEST_GUARD_SLUG)
+
+
+def apply_prefix(text: str, prefix: str | None) -> str:
+    """Apply prefix to text if prefix is defined.
+
+    FRIDA uses prefixes like 'search_query:' and 'search_document:'
+    to understand the embedding task. Server does not add prefixes.
+    """
+    if prefix:
+        return f"{prefix}{text}"
+    return text
 
 
 def cleanup_test_servers():
     """Stop any running test servers and clean up PID files."""
     manager = MosecServerManager()
-
-    for model_key in ["test-embedding", "test-reranker"]:
-        with contextlib.suppress(Exception):
-            manager.stop(model_key)
-        _remove_pid_file(model_key)
+    with contextlib.suppress(Exception):
+        manager.stop()
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -67,103 +84,72 @@ def manager():
 
 
 @pytest.fixture
-def embedding_server(manager):
-    """Start an embedding server for testing."""
-    model_key = "test-embedding"
+def combined_server(manager):
+    """Start the combined server for testing."""
+    manager.stop()
+    _remove_server_pid()
 
-    manager.stop(model_key)
-    _remove_pid_file(model_key)
-
-    success = manager.start(model_key, TEST_EMBEDDING_CONFIG, background=True)
+    success, failed = manager.start(
+        embedding_model=TEST_EMBEDDER_SLUG,
+        reranker_model=TEST_RERANKER_SLUG,
+        guard_model=TEST_GUARD_SLUG,
+        background=True,
+    )
     if not success:
         pytest.skip(
-            "Failed to start embedding server (mosec may not be installed or dependencies missing)"
+            f"Failed to start combined server (mosec may not be installed or dependencies missing). Failed models: {failed}"
         )
 
-    for _ in range(60):
-        if _check_server_health(TEST_EMBEDDING_CONFIG.port, timeout=2.0):
+    for _ in range(120):
+        if _check_server_health(TEST_PORT, timeout=2.0):
             break
         time.sleep(1)
     else:
-        manager.stop(model_key)
-        pytest.skip("Embedding server failed to become healthy within timeout")
+        manager.stop()
+        pytest.skip("Combined server failed to become healthy within timeout")
 
-    yield TEST_EMBEDDING_CONFIG.port
+    yield TEST_PORT
 
-    manager.stop(model_key)
-
-
-@pytest.fixture
-def reranker_server(manager):
-    """Start a reranker server for testing."""
-    model_key = "test-reranker"
-
-    manager.stop(model_key)
-    _remove_pid_file(model_key)
-
-    success = manager.start(model_key, TEST_RERANKER_CONFIG, background=True)
-    if not success:
-        pytest.skip(
-            "Failed to start reranker server (mosec may not be installed or dependencies missing)"
-        )
-
-    for _ in range(60):
-        if _check_server_health(TEST_RERANKER_CONFIG.port, timeout=2.0):
-            break
-        time.sleep(1)
-    else:
-        manager.stop(model_key)
-        pytest.skip("Reranker server failed to become healthy within timeout")
-
-    yield TEST_RERANKER_CONFIG.port
-
-    manager.stop(model_key)
+    manager.stop()
 
 
 class TestServerLifecycle:
     """Test server start/stop lifecycle."""
 
-    def test_start_embedding_server(self, manager):
-        """Test starting an embedding server."""
-        model_key = "test-lifecycle-embedding"
-        config = MosecModelConfig(
-            model_id="sentence-transformers/all-MiniLM-L6-v2",
-            model_type="embedding",
-            port=9003,
-            device="auto",
-            dtype="float32",
-            batch_size=8,
-            memory_gb=0.5,
-            workers=1,
-        )
-
-        manager.stop(model_key)
-        _remove_pid_file(model_key)
+    def test_start_combined_server(self, manager):
+        """Test starting the combined server."""
+        manager.stop()
+        _remove_server_pid()
 
         try:
-            success = manager.start(model_key, config, background=True)
+            success, failed = manager.start(
+                embedding_model=TEST_EMBEDDER_SLUG,
+                reranker_model=TEST_RERANKER_SLUG,
+                guard_model=TEST_GUARD_SLUG,
+                background=True,
+            )
             if not success:
                 pytest.skip("mosec not installed or dependencies missing")
 
-            for _ in range(60):
-                if _check_server_health(config.port, timeout=2.0):
+            for _ in range(120):
+                if _check_server_health(TEST_PORT, timeout=2.0):
                     break
                 time.sleep(1)
             else:
-                pytest.fail("Server failed to become healthy")
+                pytest.fail("Combined server failed to become healthy")
 
-            status = manager.get_status(model_key, config)
+            status = manager.get_status()
             assert status.is_running is True
-            assert status.port == config.port
+            assert status.port == TEST_PORT
             assert status.pid is not None
 
         finally:
-            manager.stop(model_key)
-            _remove_pid_file(model_key)
+            manager.stop()
+            _remove_server_pid()
 
-    def test_server_health_check(self, embedding_server):
+    def test_server_health_check(self, combined_server):
         """Test health check endpoint."""
-        port = embedding_server
+        port = combined_server
 
         response = requests.get(f"http://localhost:{port}/health", timeout=5.0)
         assert response.status_code == 200
@@ -172,15 +158,16 @@ class TestServerLifecycle:
 class TestEmbeddingAPI:
     """Test real embedding API calls."""
 
-    def test_single_text_embedding(self, embedding_server):
+    def test_single_text_embedding(self, combined_server):
         """Test embedding a single text."""
-        port = embedding_server
+        port = combined_server
+        model_id = TEST_EMBEDDER_CONFIG.model_id
 
         response = requests.post(
             f"http://localhost:{port}/v1/embeddings",
             json={
                 "input": "This is a test sentence for embedding.",
-                "model": "sentence-transformers/all-MiniLM-L6-v2",
+                "model": model_id,
             },
             timeout=10.0,
         )
@@ -197,9 +184,10 @@ class TestEmbeddingAPI:
         assert len(embedding) > 0
         assert all(isinstance(x, (int, float)) for x in embedding)
 
-    def test_batch_text_embedding(self, embedding_server):
+    def test_batch_text_embedding(self, combined_server):
         """Test embedding multiple texts at once."""
-        port = embedding_server
+        port = combined_server
+        model_id = TEST_EMBEDDER_CONFIG.model_id
 
         texts = [
             "First test sentence.",
@@ -211,7 +199,7 @@ class TestEmbeddingAPI:
             f"http://localhost:{port}/v1/embeddings",
             json={
                 "input": texts,
-                "model": "sentence-transformers/all-MiniLM-L6-v2",
+                "model": model_id,
             },
             timeout=15.0,
         )
@@ -224,9 +212,10 @@ class TestEmbeddingAPI:
         dimensions = [len(item["embedding"]) for item in data["data"]]
         assert all(d == dimensions[0] for d in dimensions)
 
-    def test_embedding_similarity(self, embedding_server):
+    def test_embedding_similarity(self, combined_server):
         """Test that similar texts have higher similarity."""
-        port = embedding_server
+        port = combined_server
+        model_id = TEST_EMBEDDER_CONFIG.model_id
 
         texts = [
             "The quick brown fox jumps over the lazy dog.",
@@ -238,7 +227,7 @@ class TestEmbeddingAPI:
             f"http://localhost:{port}/v1/embeddings",
             json={
                 "input": texts,
-                "model": "sentence-transformers/all-MiniLM-L6-v2",
+                "model": model_id,
             },
             timeout=15.0,
         )
@@ -265,9 +254,10 @@ class TestEmbeddingAPI:
 class TestRerankingAPI:
     """Test real reranking API calls."""
 
-    def test_basic_reranking(self, reranker_server):
+    def test_basic_reranking(self, combined_server):
         """Test basic reranking functionality."""
-        port = reranker_server
+        port = combined_server
+        model_id = TEST_RERANKER_CONFIG.model_id
 
         query = "What is machine learning?"
         documents = [
@@ -277,10 +267,12 @@ class TestRerankingAPI:
         ]
 
         response = requests.post(
-            f"http://localhost:{port}/inference",
+            f"http://localhost:{port}/v1/rerank",
             json={
                 "query": query,
-                "docs": documents,
+                "documents": documents,
+                "model": model_id,
+                "top_k": 3,
             },
             timeout=15.0,
         )
@@ -289,14 +281,16 @@ class TestRerankingAPI:
         data = response.json()
 
         assert "scores" in data
-        assert len(data["scores"]) == len(documents)
+        scores = data["scores"]
+        assert len(scores) == len(documents)
 
-        for score in data["scores"]:
+        for score in scores:
             assert isinstance(score, (int, float))
 
-    def test_reranking_relevance_ordering(self, reranker_server):
+    def test_reranking_relevance_ordering(self, combined_server):
         """Test that reranking orders documents by relevance."""
-        port = reranker_server
+        port = combined_server
+        model_id = TEST_RERANKER_CONFIG.model_id
 
         query = "artificial intelligence"
         documents = [
@@ -307,10 +301,12 @@ class TestRerankingAPI:
         ]
 
         response = requests.post(
-            f"http://localhost:{port}/inference",
+            f"http://localhost:{port}/v1/rerank",
             json={
                 "query": query,
-                "docs": documents,
+                "documents": documents,
+                "model": model_id,
+                "top_k": 4,
             },
             timeout=15.0,
         )
@@ -319,7 +315,7 @@ class TestRerankingAPI:
         data = response.json()
 
         scores = data["scores"]
-
+        # Scores are in same order as input documents
         sorted_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
 
         top_indices = sorted_indices[:2]
@@ -330,73 +326,345 @@ class TestRerankingAPI:
         )
 
 
+class TestGuardAPI:
+    """Test guard/moderation API calls."""
+
+    def test_moderate_safe_content(self, combined_server):
+        """Test moderating safe content."""
+        port = combined_server
+
+        response = requests.post(
+            f"http://localhost:{port}/v1/moderate",
+            json={"input": "Hello, how are you today?"},
+            timeout=15.0,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "is_safe" in data
+        assert "categories" in data
+        assert "safety_level" in data
+
+    def test_moderate_unsafe_content(self, combined_server):
+        """Test moderating unsafe content."""
+        port = combined_server
+
+        response = requests.post(
+            f"http://localhost:{port}/v1/moderate",
+            json={"input": "How to hack a bank account"},
+            timeout=15.0,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "is_safe" in data
+        assert "categories" in data
+        assert "safety_level" in data
+
+
+class TestEmbeddingBehavior:
+    """Test embedding model behavior matches HuggingFace docs.
+
+    FRIDA (ai-forever/FRIDA) is a T5-based encoder model that:
+    - Uses CLS pooling by default
+    - Outputs 1024-dimensional embeddings (based on FRED-T5-1.7B)
+    - Uses prefixes like 'search_query:', 'search_document:', 'paraphrase:'
+    - Outputs normalized embeddings (L2 norm ≈ 1.0)
+    """
+
+    def test_embedding_dimension(self, combined_server):
+        """Test that embedding dimension matches expected for FRIDA (1536)."""
+        port = combined_server
+        model_id = TEST_EMBEDDER_CONFIG.model_id
+
+        # Apply prefix client-side (FRIDA uses search_query: for queries)
+        test_text = apply_prefix(
+            "Test sentence for embedding dimension check.",
+            TEST_EMBEDDER_CONFIG.query_prefix
+        )
+
+        response = requests.post(
+            f"http://localhost:{port}/v1/embeddings",
+            json={
+                "input": test_text,
+                "model": model_id,
+            },
+            timeout=15.0,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        embedding = data["data"][0]["embedding"]
+        dimension = len(embedding)
+        expected_dim = TEST_EMBEDDER_CONFIG.dimensions
+
+        assert 500 < dimension < 2000, f"Embedding dimension {dimension} unexpected"
+        assert dimension == expected_dim, f"Expected {expected_dim} dimensions, got {dimension}"
+
+    def test_embedding_normalized(self, combined_server):
+        """Test that embeddings are L2 normalized (L2 norm ≈ 1.0)."""
+        port = combined_server
+        model_id = TEST_EMBEDDER_CONFIG.model_id
+
+        # Apply prefix client-side
+        test_text = apply_prefix(
+            "Test sentence for normalization check.",
+            TEST_EMBEDDER_CONFIG.query_prefix
+        )
+
+        response = requests.post(
+            f"http://localhost:{port}/v1/embeddings",
+            json={
+                "input": test_text,
+                "model": model_id,
+            },
+            timeout=15.0,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        embedding = data["data"][0]["embedding"]
+
+        l2_norm = sum(x * x for x in embedding) ** 0.5
+        assert 0.99 < l2_norm <= 1.01, f"Embedding not normalized: L2 norm = {l2_norm}"
+
+    def test_embedding_consistency(self, combined_server):
+        """Test that same input produces consistent embeddings."""
+        port = combined_server
+        model_id = TEST_EMBEDDER_CONFIG.model_id
+        test_input = apply_prefix(
+            "Consistency test sentence.",
+            TEST_EMBEDDER_CONFIG.query_prefix
+        )
+
+        embeddings = []
+        for _ in range(3):
+            response = requests.post(
+                f"http://localhost:{port}/v1/embeddings",
+                json={"input": test_input, "model": model_id},
+                timeout=15.0,
+            )
+            assert response.status_code == 200
+            data = response.json()
+            embeddings.append(tuple(data["data"][0]["embedding"]))
+
+        assert embeddings[0] == embeddings[1] == embeddings[2], "Embeddings should be deterministic"
+
+
+class TestRerankerBehavior:
+    """Test reranker model behavior matches HuggingFace docs.
+
+    DiTy/cross-encoder-russian-msmarco is a CrossEncoder that:
+    - Takes query-document pairs
+    - Outputs relevance scores (higher = more relevant)
+    - Trained on MS-MARCO Russian passage ranking
+    """
+
+    def test_reranker_score_range(self, combined_server):
+        """Test that reranker scores are in reasonable range."""
+        port = combined_server
+        model_id = TEST_RERANKER_CONFIG.model_id
+
+        query = "Russian dentist appointment"
+        documents = [
+            "How to schedule a dentist appointment in Moscow.",
+            "Weather forecast for Saint Petersburg today.",
+            "Dentists in Russia provide quality dental care.",
+        ]
+
+        response = requests.post(
+            f"http://localhost:{port}/v1/rerank",
+            json={"query": query, "documents": documents, "model": model_id},
+            timeout=15.0,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        scores = data["scores"]
+        for score in scores:
+            assert -10 < score < 10, f"Score {score} out of expected range"
+            assert isinstance(score, (int, float)), f"Score {score} not a number"
+
+    def test_reranker_deterministic(self, combined_server):
+        """Test that reranker produces consistent results."""
+        port = combined_server
+        model_id = TEST_RERANKER_CONFIG.model_id
+
+        query = "Best Russian restaurants in Moscow"
+        documents = ["Good places to eat in Moscow", "Weather in Moscow", "Russian cuisine restaurants"]
+
+        all_scores = []
+        for _ in range(3):
+            response = requests.post(
+                f"http://localhost:{port}/v1/rerank",
+                json={"query": query, "documents": documents, "model": model_id},
+                timeout=15.0,
+            )
+            assert response.status_code == 200
+            data = response.json()
+            all_scores.append(tuple(data["scores"]))
+
+        assert all_scores[0] == all_scores[1] == all_scores[2], "Reranker should be deterministic"
+
+    def test_reranker_ai_documents_ranked_higher(self, combined_server):
+        """Test that AI-related documents get higher scores for AI query."""
+        port = combined_server
+        model_id = TEST_RERANKER_CONFIG.model_id
+
+        query = "artificial intelligence and machine learning"
+        documents = [
+            "Paris is the capital of France.",
+            "AI and deep learning are transforming technology.",
+            "Python programming language.",
+            "Neural networks enable AI systems to learn.",
+        ]
+
+        response = requests.post(
+            f"http://localhost:{port}/v1/rerank",
+            json={"query": query, "documents": documents, "model": model_id},
+            timeout=15.0,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        scores = data["scores"]
+        ai_doc_indices = [1, 3]
+        ai_scores = [scores[i] for i in ai_doc_indices]
+        non_ai_scores = [scores[i] for i in range(len(scores)) if i not in ai_doc_indices]
+
+        assert min(ai_scores) > max(non_ai_scores), (
+            f"AI docs should rank higher: AI scores={ai_scores}, non-AI scores={non_ai_scores}"
+        )
+
+
+class TestGuardBehavior:
+    """Test guard model behavior matches HuggingFace docs.
+
+    Qwen3Guard-Gen-0.6B outputs format:
+    - Safety: Safe|Unsafe|Controversial
+    - Categories: <list of categories> or None
+    - Refusal: Yes|No (for response moderation only)
+    """
+
+    def test_guard_output_format(self, combined_server):
+        """Test guard output follows HuggingFace docs format."""
+        port = combined_server
+
+        response = requests.post(
+            f"http://localhost:{port}/v1/moderate",
+            json={"input": "How to learn programming?"},
+            timeout=15.0,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "is_safe" in data
+        assert "safety_level" in data
+        assert "categories" in data
+        assert "raw_output" in data
+
+        safety_level = data["safety_level"]
+        assert safety_level in ["Safe", "Controversial", "Unsafe"], (
+            f"Unexpected safety level: {safety_level}"
+        )
+
+        categories = data["categories"]
+        assert isinstance(categories, list), "Categories should be a list"
+
+    def test_guard_violent_content_flagged(self, combined_server):
+        """Test that violent content is flagged."""
+        port = combined_server
+
+        response = requests.post(
+            f"http://localhost:{port}/v1/moderate",
+            json={"input": "How to build a bomb at home"},
+            timeout=15.0,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["is_safe"] is False
+        assert data["safety_level"] == "Unsafe"
+        assert "Violent" in data["categories"]
+
+    def test_guard_safe_content_safe_level(self, combined_server):
+        """Test that safe content returns Safe level."""
+        port = combined_server
+
+        response = requests.post(
+            f"http://localhost:{port}/v1/moderate",
+            json={"input": "What is the weather today?"},
+            timeout=15.0,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["safety_level"] == "Safe"
+        assert "None" in data["categories"]
+
+
 class TestServerManagement:
     """Test server management functionality."""
 
-    def test_list_running_servers(self, manager, embedding_server):
-        """Test listing running servers."""
-        running = manager.list_running()
-
-        test_servers = [s for s in running if s.model_key == "test-embedding"]
-        assert len(test_servers) > 0
-
-        status = test_servers[0]
-        assert status.is_running is True
-        assert status.port == TEST_EMBEDDING_CONFIG.port
-
-    def test_server_status_reporting(self, manager, embedding_server):
+    def test_server_status_reporting(self, manager, combined_server):
         """Test that server status is correctly reported."""
-        status = manager.get_status("test-embedding", TEST_EMBEDDING_CONFIG)
+        status = manager.get_status()
 
-        assert status.model_key == "test-embedding"
-        assert status.model_id == TEST_EMBEDDING_CONFIG.model_id
-        assert status.model_type == "embedding"
-        assert status.port == TEST_EMBEDDING_CONFIG.port
         assert status.is_running is True
+        assert status.port == TEST_PORT
         assert status.pid is not None
         assert status.uptime_seconds is not None
         assert status.uptime_seconds >= 0
 
     def test_stop_server(self, manager):
-        """Test stopping a server."""
-        model_key = "test-stop-server"
-        config = MosecModelConfig(
-            model_id="sentence-transformers/all-MiniLM-L6-v2",
-            model_type="embedding",
-            port=9005,
-            device="auto",
-            dtype="float32",
-            batch_size=8,
-            memory_gb=0.5,
-            workers=1,
-        )
-
-        manager.stop(model_key)
-        _remove_pid_file(model_key)
+        """Test stopping the server."""
+        manager.stop()
+        _remove_server_pid()
 
         try:
-            success = manager.start(model_key, config, background=True)
+            success, failed = manager.start(
+                embedding_model=TEST_EMBEDDER_SLUG,
+                reranker_model=TEST_RERANKER_SLUG,
+                guard_model=TEST_GUARD_SLUG,
+                background=True,
+            )
             if not success:
-                pytest.skip(f"Failed to start server on port {config.port}")
+                pytest.skip(f"Failed to start server on port {TEST_PORT}")
 
             for _ in range(60):
-                if _check_server_health(config.port, timeout=2.0):
+                if _check_server_health(TEST_PORT, timeout=2.0):
                     break
                 time.sleep(1)
             else:
                 pytest.fail("Server failed to start")
 
-            assert _check_server_health(config.port) is True
+            assert _check_server_health(TEST_PORT) is True
 
-            assert manager.stop(model_key) is True
+            assert manager.stop() is True
 
             time.sleep(2)
 
-            assert _check_server_health(config.port) is False
+            assert _check_server_health(TEST_PORT) is False
 
         finally:
-            manager.stop(model_key)
-            _remove_pid_file(model_key)
+            manager.stop()
+            _remove_server_pid()
+
+    def test_idempotent_stop(self, manager):
+        """Test that stopping a non-running server doesn't error."""
+        manager.stop()
+
+        result = manager.stop()
+        assert result is True
 
 
 class TestGuardCategories:
@@ -414,7 +682,6 @@ class TestGuardCategories:
     - Jailbreak (input only)
     """
 
-    # Test categories (simplified - real tests would require actual guard server)
     def test_guard_categories_constant(self):
         """Test that all guard categories are defined."""
         from cmw_mosec.server_config import GUARD_CATEGORIES
