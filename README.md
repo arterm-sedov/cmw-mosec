@@ -45,35 +45,23 @@ This checks:
 
 ## Configuration
 
-Configure models using `.env` or command-line flags:
+Copy `.env.example` to `.env` to configure your environment:
 
 ```bash
-# Using .env (recommended for daily use)
 cp .env.example .env
-# Edit .env to set your default models
-
-# Using CLI flags (for one-off testing)
-cmw-mosec serve --guard Qwen/Qwen3Guard-Gen-0.6B
 ```
 
-### Example `.env`:
+The `.env.example` file contains all configuration options with inline documentation.
 
+**Key variables:**
+- `ACTIVE_*_MODEL` - Select which models to load (embedding, reranker, guard)
+- `SERVER_PORT` - Port for combined server (default: 8001)
+- `DEVICE` - Inference mode: `auto` (GPU if available) or `cpu`
+- `HF_TOKEN` - HuggingFace token for faster downloads (optional)
+
+**Command-line flags** override `.env`:
 ```bash
-# Active Models (one per type)
-ACTIVE_EMBEDDING_MODEL=ai-forever/FRIDA
-ACTIVE_RERANKER_MODEL=DiTy/cross-encoder-russian-msmarco
-ACTIVE_GUARD_MODEL=Qwen/Qwen3Guard-Gen-0.6B
-
-# Server Settings
-SERVER_PORT=8001
-DEVICE=auto
-DTYPE=float16
-BATCH_SIZE=32
-IDLE_TIMEOUT=1800
-LOG_LEVEL=INFO
-
-# HuggingFace Token (optional, recommended for faster downloads)
-HF_TOKEN=your_token_here
+cmw-mosec serve --guard Qwen/Qwen3Guard-Gen-0.6B
 ```
 
 ## CLI Commands
