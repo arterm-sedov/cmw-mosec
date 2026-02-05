@@ -41,7 +41,7 @@ This checks:
 - GPU availability and memory
 - Required dependencies (transformers, sentence-transformers, requests)
 
-**Note:** Models automatically use GPU if available (device_map="auto"). CPU inference is supported but slower.
+**Supported modes:** GPU (device_map="auto"), CPU
 
 ## Configuration
 
