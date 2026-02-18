@@ -169,8 +169,12 @@ class EmbeddingWorker(Worker):
                 model_output = self.model.encoder(**inputs)
             else:
                 model_output = self.model(**inputs)
-        # Use mean pooling (works for both T5 and BERT-based models)
-        sentence_embeddings = self.mean_pooling(model_output, inputs["attention_mask"])
+        # Use CLS pooling for T5-based models (FRIDA), mean pooling for others
+        # T5/FRED-T5 models require CLS pooling per HuggingFace docs
+        if hasattr(self.model, 'encoder'):
+            sentence_embeddings = self.cls_pooling(model_output)
+        else:
+            sentence_embeddings = self.mean_pooling(model_output, inputs["attention_mask"])
         sentence_embeddings = F.normalize(sentence_embeddings, p=2, dim=1)
         token_count = inputs["attention_mask"].sum(dim=1).tolist()[0]
         return token_count, sentence_embeddings
