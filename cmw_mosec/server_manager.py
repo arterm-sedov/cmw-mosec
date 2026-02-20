@@ -113,7 +113,6 @@ def _generate_server_script(
             from .server_config import ModelRegistry
 
             registry = ModelRegistry()
-            # Try to get embedding config and extract pooling and dtype
             config_dict = registry._embeddings.get(embedding_model.lower(), {})
             pooling_method = config_dict.get("pooling", "mean")
             embed_dtype = config_dict.get("dtype", "float16")
@@ -615,7 +614,7 @@ class MosecServerManager:
         )
 
         server_script = _generate_server_script(settings, emb_model, rer_model, guard_m)
-        script_path = self._script_dir / f"mosec_server_{settings.server_port}.py"
+        script_path = self._script_dir / "mosec_server.py"
         with open(script_path, "w") as f:
             f.write(server_script)
         cmd = [sys.executable, str(script_path), "--port", str(settings.server_port)]
