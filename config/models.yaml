@@ -22,6 +22,7 @@ embedding_models:
     memory_gb: 4.0
     workers: 1
     dimensions: 1536
+    model_class: T5EncoderModel  # T5-based model needs encoder-only
     query_prefix: "search_query: "
     doc_prefix: "search_document: "
     pooling: cls  # T5-based model requires CLS pooling

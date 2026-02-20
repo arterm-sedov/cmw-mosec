@@ -107,6 +107,7 @@ def _generate_server_script(
     # Get pooling config for embedding model
     pooling_method = "mean"  # default
     embed_dtype = "float16"  # default
+    model_class = "AutoModel"  # default
     if embedding_model:
         try:
             from .server_config import ModelRegistry
@@ -116,9 +117,11 @@ def _generate_server_script(
             config_dict = registry._embeddings.get(embedding_model.lower(), {})
             pooling_method = config_dict.get("pooling", "mean")
             embed_dtype = config_dict.get("dtype", "float16")
+            model_class = config_dict.get("model_class", "AutoModel")
         except Exception:
             pooling_method = "mean"
             embed_dtype = "float16"
+            model_class = "AutoModel"
 
     # Embedding worker
     if embedding_model:
@@ -139,6 +142,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 EMBEDDING_MODEL = "{embedding_model}"
 DTYPE = "{embed_dtype}"
 POOLING = "{pooling_method}"
+MODEL_CLASS = "{model_class}"
 
 
 class EmbeddingWorker(Worker):
@@ -147,9 +151,8 @@ class EmbeddingWorker(Worker):
         self.pooling = POOLING
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name)
 
-        # Detect T5-based models (like FRIDA) and use encoder-only
-        if "FRIDA" in self.model_name.upper() or "t5" in self.model_name.lower():
-            # T5-based models need T5EncoderModel, not AutoModel
+        # Load model class from config (e.g., T5EncoderModel for FRIDA, AutoModel for others)
+        if MODEL_CLASS == "T5EncoderModel":
             self.model = transformers.T5EncoderModel.from_pretrained(self.model_name)
         else:
             self.model = transformers.AutoModel.from_pretrained(self.model_name)
@@ -201,7 +204,7 @@ class EmbeddingWorker(Worker):
         inputs = encoded_input.to(self.device)
         with torch.no_grad():
             model_output = self.model(**inputs)
-        
+
         # Select pooling method based on config or auto-detect for T5
         if hasattr(self.model, 'encoder') and self.pooling == "cls":
             # T5-based models with explicit CLS pooling config (FRIDA)
@@ -215,7 +218,7 @@ class EmbeddingWorker(Worker):
         else:
             # Default: mean pooling
             sentence_embeddings = self.mean_pooling(model_output, inputs["attention_mask"])
-        
+
         sentence_embeddings = F.normalize(sentence_embeddings, p=2, dim=1)
         token_count = inputs["attention_mask"].sum(dim=1).tolist()[0]
         return token_count, sentence_embeddings

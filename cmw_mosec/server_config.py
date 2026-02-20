@@ -162,6 +162,8 @@ class MosecModelConfig(BaseModel):
         default=None, description="Min transformers version"
     )
     description: str | None = Field(default=None, description="Model description")
+    # Model class to use (e.g., T5EncoderModel, AutoModel)
+    model_class: str | None = Field(default=None, description="Model class (e.g., T5EncoderModel)")
     # Embedding-specific fields
     dimensions: int | None = Field(default=None, description="Embedding dimension")
     query_prefix: str | None = Field(
