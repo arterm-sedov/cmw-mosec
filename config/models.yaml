@@ -24,6 +24,7 @@ embedding_models:
     dimensions: 1536
     query_prefix: "search_query: "
     doc_prefix: "search_document: "
+    pooling: cls  # T5-based model requires CLS pooling
     description: "Russian-optimized embedding, 1536 dimensions"
 
   # Qwen3 Embedding Series (multilingual, 119+ languages)
@@ -33,6 +34,7 @@ embedding_models:
     batch_size: 16
     memory_gb: 2.0
     workers: 1
+    pooling: last_token  # Required for Qwen3 causal LM architecture
     description: "0.6B params, 1024 dim, 32K context, MRL support"
 
   Qwen/Qwen3-Embedding-4B:
@@ -41,6 +43,7 @@ embedding_models:
     batch_size: 16
     memory_gb: 12.0
     workers: 1
+    pooling: last_token  # Required for Qwen3 causal LM architecture
     description: "4B params, 2560 dim, 32K context, MRL support"
 
   Qwen/Qwen3-Embedding-8B:
@@ -49,6 +52,7 @@ embedding_models:
     batch_size: 8
     memory_gb: 22.0
     workers: 1
+    pooling: last_token  # Required for Qwen3 causal LM architecture
     description: "8B params, 4096 dim, 32K context, MRL support"
 
 ################################################################################

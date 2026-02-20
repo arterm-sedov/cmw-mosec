@@ -104,6 +104,19 @@ def _generate_server_script(
         except ValueError:
             guard_max_new_tokens = 128
 
+    # Get pooling config for embedding model
+    pooling_method = "mean"  # default
+    if embedding_model:
+        try:
+            from .server_config import ModelRegistry
+
+            registry = ModelRegistry()
+            # Try to get embedding config and extract pooling
+            config_dict = registry._embeddings.get(embedding_model.lower(), {})
+            pooling_method = config_dict.get("pooling", "mean")
+        except Exception:
+            pooling_method = "mean"
+
     # Embedding worker
     if embedding_model:
         embedder_code = f'''
@@ -122,11 +135,13 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 EMBEDDING_MODEL = "{embedding_model}"
 DTYPE = "{settings.dtype}"
+POOLING = "{pooling_method}"
 
 
 class EmbeddingWorker(Worker):
     def __init__(self):
         self.model_name = EMBEDDING_MODEL
+        self.pooling = POOLING
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name)
         self.model = transformers.AutoModel.from_pretrained(self.model_name)
         self.device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
@@ -153,6 +168,18 @@ class EmbeddingWorker(Worker):
         """
         return model_output[0][:, 0, :]
 
+    def last_token_pool(self, model_output, attention_mask):
+        """Last token pooling - use final token as sentence representation.
+
+        Required for Qwen3 embedding models (causal LM architecture).
+        """
+        # Get the last non-padding token for each sequence
+        sequence_lengths = attention_mask.sum(dim=1) - 1
+        batch_size = model_output[0].shape[0]
+        # Gather last token embeddings
+        last_token_embeddings = model_output[0][torch.arange(batch_size, device=model_output[0].device), sequence_lengths]
+        return last_token_embeddings
+
     def get_embeddings(self, texts: Union[str, List[Union[str, List[int]]]]):
         # Handle both single string and list of strings
         if isinstance(texts, str):
@@ -163,18 +190,22 @@ class EmbeddingWorker(Worker):
         )
         inputs = encoded_input.to(self.device)
         with torch.no_grad():
-            # Handle different model architectures
-            # T5 models have encoder attribute, others (BERT, Qwen) use the model directly
-            if hasattr(self.model, 'encoder'):
-                model_output = self.model.encoder(**inputs)
-            else:
-                model_output = self.model(**inputs)
-        # Use CLS pooling for T5-based models (FRIDA), mean pooling for others
-        # T5/FRED-T5 models require CLS pooling per HuggingFace docs
-        if hasattr(self.model, 'encoder'):
+            model_output = self.model(**inputs)
+        
+        # Select pooling method based on config or auto-detect for T5
+        if hasattr(self.model, 'encoder') and self.pooling == "cls":
+            # T5-based models with explicit CLS pooling config (FRIDA)
+            sentence_embeddings = self.cls_pooling(model_output)
+        elif self.pooling == "last_token":
+            # Last token pooling (Qwen3 embedding models)
+            sentence_embeddings = self.last_token_pool(model_output, inputs["attention_mask"])
+        elif self.pooling == "cls":
+            # CLS pooling for non-T5 models
             sentence_embeddings = self.cls_pooling(model_output)
         else:
+            # Default: mean pooling
             sentence_embeddings = self.mean_pooling(model_output, inputs["attention_mask"])
+        
         sentence_embeddings = F.normalize(sentence_embeddings, p=2, dim=1)
         token_count = inputs["attention_mask"].sum(dim=1).tolist()[0]
         return token_count, sentence_embeddings

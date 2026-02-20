@@ -53,4 +53,4 @@ Thumbs.db
 # Environment files (contains secrets)
 .env
 .env.local
-.env.*.local
+.env.*.localsession-*.md

@@ -170,6 +170,9 @@ class MosecModelConfig(BaseModel):
     doc_prefix: str | None = Field(
         default=None, description="Document prefix (e.g., 'search_document: ')"
     )
+    pooling: Literal["mean", "cls", "last_token"] = Field(
+        default="mean", description="Pooling method (mean/cls/last_token)"
+    )
 
     @field_validator("workers", mode="before")
     @classmethod
