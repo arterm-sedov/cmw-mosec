@@ -106,16 +106,19 @@ def _generate_server_script(
 
     # Get pooling config for embedding model
     pooling_method = "mean"  # default
+    embed_dtype = "float16"  # default
     if embedding_model:
         try:
             from .server_config import ModelRegistry
 
             registry = ModelRegistry()
-            # Try to get embedding config and extract pooling
+            # Try to get embedding config and extract pooling and dtype
             config_dict = registry._embeddings.get(embedding_model.lower(), {})
             pooling_method = config_dict.get("pooling", "mean")
+            embed_dtype = config_dict.get("dtype", "float16")
         except Exception:
             pooling_method = "mean"
+            embed_dtype = "float16"
 
     # Embedding worker
     if embedding_model:
@@ -134,7 +137,7 @@ from mosec import ClientError, Worker
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 EMBEDDING_MODEL = "{embedding_model}"
-DTYPE = "{settings.dtype}"
+DTYPE = "{embed_dtype}"
 POOLING = "{pooling_method}"
 
 
