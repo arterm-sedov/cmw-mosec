@@ -17,7 +17,7 @@ embedding_models:
   # Uses search_query: and search_document: prefixes per HuggingFace docs
   ai-forever/FRIDA:
     model_id: ai-forever/FRIDA
-    dtype: float16
+    dtype: float32  # FRIDA requires float32
     batch_size: 16
     memory_gb: 4.0
     workers: 1

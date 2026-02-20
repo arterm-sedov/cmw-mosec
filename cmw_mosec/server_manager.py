@@ -146,7 +146,14 @@ class EmbeddingWorker(Worker):
         self.model_name = EMBEDDING_MODEL
         self.pooling = POOLING
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name)
-        self.model = transformers.AutoModel.from_pretrained(self.model_name)
+
+        # Detect T5-based models (like FRIDA) and use encoder-only
+        if "FRIDA" in self.model_name.upper() or "t5" in self.model_name.lower():
+            # T5-based models need T5EncoderModel, not AutoModel
+            self.model = transformers.T5EncoderModel.from_pretrained(self.model_name)
+        else:
+            self.model = transformers.AutoModel.from_pretrained(self.model_name)
+
         self.device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
         self.model = self.model.to(self.device)
         self.model.eval()
