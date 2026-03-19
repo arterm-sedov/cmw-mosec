@@ -88,11 +88,15 @@ if reranker_max_length is None:
 
 ## Key Technical Details
 - Qwen3 models use `<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc>` format
-- Prefix: `"system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".\nuser\n"`
-- Suffix: `"\nassistant\n\n\n\n"`
+- ChatML format from HuggingFace model card:
+  - Fixed: `<|im_start|>system\n`, `<|im_end|>\n`, `<|im_start|>user\n`, `<|im_end|>\n<|im_start|>assistant\n`
+  - Fixed: `"Note that the answer can only be \"yes\" or \"no\"."` (binary classification)
+  - Configurable: `system_prompt` from models.yaml
+  - Client-provided: `instruction` in request (server uses empty string if not provided)
 - Scoring: Uses softmax over "yes"/"no" token logits at final position
-- Standard models: Use sentence-transformers CrossEncoder.predict() with padding token fix
-- Max length: Config-driven defaults, client-controllable override
+- Standard models: Use sentence-transformers CrossEncoder.predict() with model_max_length for truncation
+- Max length: Config-driven defaults (max_length in models.yaml), client-controllable override
+- Reranker type: Config-driven (reranker_type: cross_encoder or causal_lm)
 
 ## Impact
 - Enables production use of Qwen3-Reranker-0.6B/4B/8B models

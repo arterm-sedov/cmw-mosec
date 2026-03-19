@@ -97,12 +97,15 @@ All models correctly rank relevant documents first:
 - Uses `AutoModelForCausalLM` and `AutoTokenizer` (padding_side='left')
 - Sets pad_token to eos_token if not present
 - Extracts "yes"/"no" token IDs for scoring
-- Applies prefix: `"system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".\nuser\n"`
-- Applies suffix: `"\nassistant\n\n\n\n"`
-- Formats input as: `prefix + "<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc}" + suffix`
+- ChatML format prefix/suffix (from HuggingFace model card):
+  - Fixed: `<|im_start|>system\n`, `<|im_end|>\n`, `<|im_start|>user\n`, `<|im_end|>\n<|im_start|>assistant\n`
+  - Fixed: `"Note that the answer can only be \"yes\" or \"no\"."` (binary classification instruction)
+  - Configurable: `system_prompt` from model config (e.g., "Judge whether the Document meets the requirements based on the Query and the Instruct provided.")
+  - Client-provided: `instruction` in `<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc>`
 - Tokenizes with `max_length=effective_max_length`
 - Pads to `effective_max_length + len(prefix_tokens) + len(suffix_tokens)`
 - Scores using softmax over yes/no token logits at final position
+- Config-driven: `system_prompt` field in models.yaml, `reranker_type: causal_lm`
 
 **Standard Models (DiTy, BGE)**:
 - Uses `sentence_transformers.CrossEncoder`
