@@ -97,15 +97,14 @@ All models correctly rank relevant documents first:
 - Uses `AutoModelForCausalLM` and `AutoTokenizer` (padding_side='left')
 - Sets pad_token to eos_token if not present
 - Extracts "yes"/"no" token IDs for scoring
-- ChatML format prefix/suffix (from HuggingFace model card):
-  - Fixed: `<|im_start|>system\n`, `<|im_end|>\n`, `<|im_start|>user\n`, `<|im_end|>\n<|im_start|>assistant\n`
-  - Fixed: `"Note that the answer can only be \"yes\" or \"no\"."` (binary classification instruction)
-  - Configurable: `system_prompt` from model config (e.g., "Judge whether the Document meets the requirements based on the Query and the Instruct provided.")
-  - Client-provided: `instruction` in `<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc>`
+- ChatML format from HuggingFace model card:
+  - **Fixed (not configurable):** `<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n`
+  - **Fixed (not configurable):** `<|im_end|>\n<|im_start|>assistant\n\n\n\n\n`
+  - **Client-provided:** `instruction` in `<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc>` (empty string if not provided)
 - Tokenizes with `max_length=effective_max_length`
 - Pads to `effective_max_length + len(prefix_tokens) + len(suffix_tokens)`
 - Scores using softmax over yes/no token logits at final position
-- Config-driven: `system_prompt` field in models.yaml, `reranker_type: causal_lm`
+- Config-driven: `reranker_type: causal_lm`, `max_length` in models.yaml
 
 **Standard Models (DiTy, BGE)**:
 - Uses `sentence_transformers.CrossEncoder`
