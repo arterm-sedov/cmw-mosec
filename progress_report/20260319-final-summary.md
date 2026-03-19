@@ -60,7 +60,22 @@ All models correctly rank relevant documents first:
 - **Qwen3**: "Автомобиль" scores 0.096, "AI and deep learning" scores 0.164
 
 #### Results (with instructions - Qwen3 only)
-When providing task-specific instructions to Qwen3, reranking quality improves. The instruction-aware design allows clients to specify the retrieval context (e.g., "Find technical documents about programming" vs "Find news articles about politics").
+**Key discovery**: Qwen3-Reranker was trained primarily with English instructions.
+
+| Query Language | No Instruction | With Instruction |
+|----------------|----------------|------------------|
+| Russian "машина" | **0.637** | 0.068 |
+| English "artificial intelligence" | 0.182 | **0.562** |
+
+**Findings:**
+- **English queries**: Instructions improve scores significantly (0.182 → 0.562, ~3x boost)
+- **Multilingual queries**: No instruction works better for general semantic similarity
+- **Ranking is always correct** regardless of instruction presence
+- **Matches HuggingFace guidance**: "In multilingual contexts, we also advise users to write their instructions in English, as most instructions utilized during the model training process were originally written in English."
+
+**Best practice for Qwen3-Reranker:**
+- English queries: Use `instruction` parameter (matches training data)
+- Multilingual queries: Either use no instruction for general semantic matching, or craft domain-specific English instructions for specialized tasks
 
 ## Technical Details
 
