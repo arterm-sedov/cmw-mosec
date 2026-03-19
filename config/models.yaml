@@ -69,6 +69,7 @@ reranker_models:
     batch_size: 32
     memory_gb: 2.0
     workers: 1
+    max_length: 512
     description: "Russian-optimized cross-encoder reranker"
 
   # BGE Reranker - Multilingual
@@ -78,6 +79,7 @@ reranker_models:
     batch_size: 32
     memory_gb: 2.0
     workers: 1
+    max_length: 512
     description: "Multilingual reranker based on BGE-M3"
 
   # Qwen3 Reranker Series (multilingual, 119+ languages)
@@ -87,6 +89,7 @@ reranker_models:
     batch_size: 32
     memory_gb: 2.0
     workers: 1
+    max_length: 32768
     description: "0.6B params, instruction-aware reranking"
 
   Qwen/Qwen3-Reranker-4B:
