@@ -22,8 +22,8 @@ Today's work focused on enhancing the cmw-mosec server's reranker functionality 
 
 ### 3. Configurable Context Window (`max_length`)
 - **Added `max_length` field to model configurations** (`config/models.yaml`):
-  - DiTy/cross-encoder-russian-msmarco: 512 tokens
-  - BAAI/bge-reranker-v2-m3: 512 tokens  
+  - DiTy/cross-encoder-russian-msmarco: 512 tokens (model limit)
+  - BAAI/bge-reranker-v2-m3: 8192 tokens (model limit; tokenizer supports up to 8192)
   - Qwen/Qwen3-Reranker-0.6B: 32768 tokens (32k per model card)
 - **Client-controllable**: Requests can now include `"max_length": <value>` to override defaults
 - **Fallback hierarchy**: Client request → Model config → Safe defaults

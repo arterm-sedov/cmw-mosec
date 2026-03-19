@@ -79,7 +79,7 @@ reranker_models:
     batch_size: 32
     memory_gb: 2.0
     workers: 1
-    max_length: 512
+    max_length: 8192
     description: "Multilingual reranker based on BGE-M3"
 
   # Qwen3 Reranker Series (multilingual, 119+ languages)
