@@ -265,9 +265,9 @@ class EmbeddingWorker(Worker):
         reranker_code = f'''
 import json
 import os
-from typing import Any
+import torch
+from typing import Any, List
 
-from sentence_transformers import CrossEncoder
 from mosec import Worker
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -278,7 +278,36 @@ RERANKER_MODEL = "{reranker_model}"
 class RerankerWorker(Worker):
     def __init__(self):
         self.model_name = RERANKER_MODEL
-        self.model = CrossEncoder(self.model_name)
+        # Determine if this is a Qwen3 model (needs special handling) or standard CrossEncoder
+        self.is_qwen3 = "Qwen" in self.model_name and "Reranker" in self.model_name
+        
+        if self.is_qwen3:
+            # Use AutoModelForCausalLM for Qwen3 reranker models
+            from transformers import AutoTokenizer, AutoModelForCausalLM
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, padding_side='left')
+            self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
+            self.model.eval()
+            
+            # Set pad token if not set (Qwen3 tokenizer may not have pad token initially)
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                
+            # Get token IDs for yes/no
+            self.token_true_id = self.tokenizer.convert_tokens_to_ids("yes")
+            self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")
+            
+            # Prefix and suffix tokens from the model documentation
+            self.prefix = "system\\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \\\"yes\\\" or \\\"no\\\".\\nuser\\n"
+            self.suffix = "\\nassistant\\n\\n\\n\\n"
+            self.prefix_tokens = self.tokenizer.encode(self.prefix, add_special_tokens=False)
+            self.suffix_tokens = self.tokenizer.encode(self.suffix, add_special_tokens=False)
+        else:
+            # Use sentence_transformers CrossEncoder for standard models (DiTy, BGE, etc.)
+            from sentence_transformers import CrossEncoder
+            self.model = CrossEncoder(self.model_name)
+            # Fix for padding token issue
+            if self.model.tokenizer.pad_token is None:
+                self.model.tokenizer.pad_token = self.model.tokenizer.eos_token
 
     def deserialize(self, data: bytes) -> dict[str, Any]:
         return json.loads(data.decode("utf-8"))
@@ -290,10 +319,54 @@ class RerankerWorker(Worker):
         query = data["query"]
         # Accept both "docs" and "documents" field names
         docs = data.get("docs") or data.get("documents")
-        # top_k is optional - return all scores, client can slice
-        scores = self.model.predict([[query, doc] for doc in docs])
-        return {{"scores": scores.tolist()}}
- '''
+        
+        if self.is_qwen3:
+            # Qwen3-specific processing - use client instruction or empty string if none provided
+            # This ensures the server is agnostic and doesn't impose semantic bias
+            if "instruction" in data:
+                instruction = data["instruction"]
+                # Handle null/explicitly None instruction
+                if instruction is None:
+                    instruction = ""
+            else:
+                # No instruction field provided - use empty string
+                instruction = ""
+                
+            pairs = []
+            for doc in docs:
+                # Format according to Qwen3 documentation
+                output = f"<Instruct>: {{instruction}}\\n<Query>: {{query}}\\n<Document>: {{doc}}".format(instruction=instruction, query=query, doc=doc)
+                pairs.append(output)
+            
+            # Tokenize inputs
+            inputs = self.tokenizer(
+                pairs, padding=False, truncation='longest_first',
+                return_attention_mask=False, max_length=8192
+            )
+            # Add prefix and suffix tokens
+            for i, ele in enumerate(inputs['input_ids']):
+                inputs['input_ids'][i] = self.prefix_tokens + ele + self.suffix_tokens
+            inputs = self.tokenizer.pad(inputs, padding=True, return_tensors="pt", max_length=8192+len(self.prefix_tokens)+len(self.suffix_tokens))
+            
+            # Move to same device as model
+            inputs = {{k: v.to(self.model.device) for k, v in inputs.items()}}
+            
+            # Get predictions
+            with torch.no_grad():
+                batch_scores = self.model(**inputs).logits[:, -1, :]
+                true_vector = batch_scores[:, self.token_true_id]
+                false_vector = batch_scores[:, self.token_false_id]
+                batch_scores = torch.stack([false_vector, true_vector], dim=1)
+                batch_scores = torch.nn.functional.log_softmax(batch_scores, dim=1)
+                scores = batch_scores[:, 1].exp().tolist()
+            
+            return {{"scores": scores}}
+        else:
+            # Standard sentence_transformers approach
+            # top_k is optional - return all scores, client can slice
+            scores = self.model.predict([[query, doc] for doc in docs])
+            return {{"scores": scores.tolist()}}
+'''
 
     # Guard worker
     if guard_model:
