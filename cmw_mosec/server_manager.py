@@ -565,19 +565,15 @@ if __name__ == "__main__":
 
     # Register embedding endpoint
     if "EmbeddingWorker" in globals():
-        emb = Runtime(EmbeddingWorker)
-        routes["/v1/embeddings"] = [emb]
-        routes["/embeddings"] = [emb]
+        routes["/v1/embeddings"] = [Runtime(EmbeddingWorker)]
 
     # Register reranker endpoint
     if "RerankerWorker" in globals():
         routes["/v1/rerank"] = [Runtime(RerankerWorker)]
-        routes["/rerank"] = [Runtime(RerankerWorker)]
 
     # Register guard endpoint
     if "GuardWorker" in globals():
         routes["/v1/moderate"] = [Runtime(GuardWorker)]
-        routes["/moderate"] = [Runtime(GuardWorker)]
 
     server.register_runtime(routes)
 
