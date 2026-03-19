@@ -65,6 +65,7 @@ reranker_models:
   # DiTy CrossEncoder - Russian optimized
   DiTy/cross-encoder-russian-msmarco:
     model_id: DiTy/cross-encoder-russian-msmarco
+    reranker_type: cross_encoder
     dtype: float16
     batch_size: 32
     memory_gb: 2.0
@@ -75,6 +76,7 @@ reranker_models:
   # BGE Reranker - Multilingual
   BAAI/bge-reranker-v2-m3:
     model_id: BAAI/bge-reranker-v2-m3
+    reranker_type: cross_encoder
     dtype: float16
     batch_size: 32
     memory_gb: 2.0
@@ -85,6 +87,7 @@ reranker_models:
   # Qwen3 Reranker Series (multilingual, 119+ languages)
   Qwen/Qwen3-Reranker-0.6B:
     model_id: Qwen/Qwen3-Reranker-0.6B
+    reranker_type: causal_lm
     dtype: float16
     batch_size: 32
     memory_gb: 2.0
@@ -94,18 +97,22 @@ reranker_models:
 
   Qwen/Qwen3-Reranker-4B:
     model_id: Qwen/Qwen3-Reranker-4B
+    reranker_type: causal_lm
     dtype: float16
     batch_size: 16
     memory_gb: 12.0
     workers: 1
+    max_length: 32768
     description: "4B params, instruction-aware reranking"
 
   Qwen/Qwen3-Reranker-8B:
     model_id: Qwen/Qwen3-Reranker-8B
+    reranker_type: causal_lm
     dtype: float16
     batch_size: 8
     memory_gb: 22.0
     workers: 1
+    max_length: 32768
     description: "8B params, instruction-aware reranking"
 
 ################################################################################
