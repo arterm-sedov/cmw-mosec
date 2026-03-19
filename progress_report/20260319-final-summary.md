@@ -62,20 +62,24 @@ All models correctly rank relevant documents first:
 #### Results (with instructions - Qwen3 only)
 **Key discovery**: Qwen3-Reranker was trained primarily with English instructions.
 
-| Query Language | No Instruction | With Instruction |
-|----------------|----------------|------------------|
-| Russian "машина" | **0.637** | 0.068 |
-| English "artificial intelligence" | 0.182 | **0.562** |
+| Query Language | Content Type | No Instruction | With Instruction |
+|----------------|--------------|----------------|-------------------|
+| Russian | Pure Russian | **0.637** | 0.068 |
+| English | Pure English | 0.182 | **0.562** |
+| Russian | Mixed Russian+Code | 0.984 | **0.992** |
 
 **Findings:**
 - **English queries**: Instructions improve scores significantly (0.182 → 0.562, ~3x boost)
-- **Multilingual queries**: No instruction works better for general semantic similarity
+- **Pure multilingual queries**: No instruction works better for general semantic matching
+- **Mixed-language content** (Russian + English code): Language-aware instructions help (0.992 vs 0.984)
 - **Ranking is always correct** regardless of instruction presence
-- **Matches HuggingFace guidance**: "In multilingual contexts, we also advise users to write their instructions in English, as most instructions utilized during the model training process were originally written in English."
+- **Matches HuggingFace guidance**: "In multilingual contexts, we also advise users to write their instructions in English"
 
 **Best practice for Qwen3-Reranker:**
 - English queries: Use `instruction` parameter (matches training data)
-- Multilingual queries: Either use no instruction for general semantic matching, or craft domain-specific English instructions for specialized tasks
+- Pure multilingual queries: Use no instruction for general semantic similarity
+- Mixed-language content (Russian + English code): Use language-aware instruction like "Retrieve relevant passages from technical documentation that may contain Russian text and English code examples"
+- **Language hint instruction**: `"Retrieve relevant passages from technical documentation that may contain Russian text and English code examples"` - explicitly hints at mixed-language content
 
 ## Technical Details
 
