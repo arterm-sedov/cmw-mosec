@@ -273,6 +273,8 @@ class EmbeddingWorker(Worker):
             raise ValueError(f"max_length not configured for reranker model {reranker_model}")
 
         reranker_type = config.get("reranker_type", "cross_encoder")
+        # System prompt for Qwen3 models (from config, only used for causal_lm type)
+        reranker_system_prompt = config.get("system_prompt", "")
 
         reranker_code = f'''
 import json
@@ -287,6 +289,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 RERANKER_MODEL = "{reranker_model}"
 MAX_LENGTH = {reranker_max_length}
 RERANKER_TYPE = "{reranker_type}"
+SYSTEM_PROMPT = "{reranker_system_prompt}"
 
 
 class RerankerWorker(Worker):
@@ -311,9 +314,12 @@ class RerankerWorker(Worker):
             self.token_true_id = self.tokenizer.convert_tokens_to_ids("yes")
             self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")
 
-            # Prefix and suffix tokens from the model documentation
-            self.prefix = "system\\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \\"yes\\" or \\"no\\".\\nuser\\n"
-            self.suffix = "\\nassistant\\n\\n\\n\\n"
+            # Prefix and suffix tokens from Qwen3 model card
+            # ChatML format with configurable system_prompt (from config)
+            # Fixed: binary classification instruction and chat template markers
+            system_content = SYSTEM_PROMPT + " Note that the answer can only be \\"yes\\" or \\"no\\"."
+            self.prefix = "<|im_start|>system\\n" + system_content + "<|im_end|>\\n<|im_start|>user\\n"
+            self.suffix = "<|im_end|>\\n<|im_start|>assistant\\n\\n\\n\\n\\n"
             self.prefix_tokens = self.tokenizer.encode(self.prefix, add_special_tokens=False)
             self.suffix_tokens = self.tokenizer.encode(self.suffix, add_special_tokens=False)
         else:
