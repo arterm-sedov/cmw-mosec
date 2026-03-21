@@ -390,38 +390,33 @@ class RerankerWorker(Worker):
     def forward(self, data: dict[str, Any]) -> dict[str, Any]:
         """Forward pass for reranker endpoint.
         
-        Default response: simple scores array - lightweight, backward compatible
-        With return_documents=true: results sorted by relevance with text - Cohere/Jina format
+        Returns Cohere/Jina format sorted by relevance.
+        Results include index, document text, and relevance score.
         """
         query = data["query"]
         docs = data.get("docs") or data.get("documents")
         effective_max_length = data.get("max_length") or self.max_length
-        return_documents = data.get("return_documents", False)
         top_n = data.get("top_n")
         
         # Compute raw scores
         scores = self._compute_scores(query, docs, effective_max_length)
         
-        if return_documents:
-            # Cohere/Jina format: sorted results with document text
-            indexed_scores = list(enumerate(zip(docs, scores)))
-            indexed_scores.sort(key=lambda x: x[1][1], reverse=True)
-            
-            if top_n is not None:
-                indexed_scores = indexed_scores[:top_n]
-            
-            results = [
-                {{
-                    "index": i,
-                    "document": {{"text": doc}},
-                    "relevance_score": float(score)
-                }}
-                for i, (doc, score) in indexed_scores
-            ]
-            return {{"results": results}}
-        else:
-            # Simple scores format (default)
-            return {{"scores": scores}}
+        # Sort by relevance (descending) and format results
+        indexed_scores = list(enumerate(zip(docs, scores)))
+        indexed_scores.sort(key=lambda x: x[1][1], reverse=True)
+        
+        if top_n is not None:
+            indexed_scores = indexed_scores[:top_n]
+        
+        results = [
+            {{
+                "index": i,
+                "document": {{"text": doc}},
+                "relevance_score": float(score)
+            }}
+            for i, (doc, score) in indexed_scores
+        ]
+        return {{"results": results}}
 
 
 class ScoreWorker(RerankerWorker):

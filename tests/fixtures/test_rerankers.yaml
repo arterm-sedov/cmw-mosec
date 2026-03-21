@@ -5,60 +5,19 @@
 #   pytest tests/test_reranker_endpoints.py
 #   cmw-mosec check-rerank
 #
-# Endpoint Contracts (industry-standard):
-#   /v1/score - vLLM format (lightweight, no documents returned)
+# Endpoint Contracts (industry-standard, vLLM/Cohere/Jina compatible):
+#   /v1/score - Lightweight raw scores
 #     Request: {query, documents}
 #     Response: {data: [{index, object: "score", score}, ...]}
+#     - Scores in original document order
+#     - No documents returned (client already has them)
 #
-#   /v1/rerank - Simple or Cohere format
-#     Default: {query, documents} → {scores: [...]}
-#     Cohere format: {query, documents, return_documents: true} →
-#       {results: [{index, document: {text}, relevance_score}, ...]}
-#
-# Model Types:
-#   cross_encoder - Raw query/documents, no formatting needed
-#   llm_reranker - Requires client-side formatting with templates below
-
-################################################################################
-# ENDPOINT CONTRACTS
-################################################################################
-
-endpoints:
-  score:
-    path: /v1/score
-    description: "vLLM format - lightweight scoring, returns index + score only"
-    request:
-      query: string
-      documents: list[string]
-    response:
-      data:
-        - index: int
-          object: "score"
-          score: float
-  
-  rerank_simple:
-    path: /v1/rerank
-    description: "Simple format - backward compatible, returns scores array"
-    request:
-      query: string
-      documents: list[string]
-    response:
-      scores: list[float]
-  
-  rerank_cohere:
-    path: /v1/rerank
-    description: "Cohere/Jina format - sorted results with document text"
-    request:
-      query: string
-      documents: list[string]
-      return_documents: true
-      top_n: int  # optional
-    response:
-      results:
-        - index: int
-          document:
-            text: string
-          relevance_score: float
+#   /v1/rerank - Sorted results with documents
+#     Request: {query, documents, top_n?}
+#     Response: {results: [{index, document: {text}, relevance_score}, ...]}
+#     - Sorted by relevance (highest first)
+#     - Includes document text for each result
+#     - Optional top_n to limit results
 
 ################################################################################
 # CROSS-ENCODER MODELS (no formatting needed)

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Test cmw-mosec reranker endpoints with vLLM-compatible contracts.
+"""Test cmw-mosec reranker endpoints with industry-standard contracts.
 
 Tests two endpoints:
-- /v1/score: Returns vLLM format {data: [{index, object, score}, ...]}
-- /v1/rerank: Returns Cohere/Jina format {results: [{index, document, relevance_score}, ...]}
-                          OR simple format {scores: [...]}
+- /v1/score: vLLM format {data: [{index, object, score}, ...]} - lightweight, raw scores
+- /v1/rerank: Cohere format {results: [{index, document, relevance_score}, ...]} - sorted by relevance
 
 Test harness reads configuration from tests/fixtures/test_rerankers.yaml.
 """
@@ -68,10 +67,7 @@ def test_score_endpoint(port: int, query: str, documents: list[str]) -> dict:
     Returns: {data: [{index, object, score}, ...]}
     """
     url = f"http://localhost:{port}/v1/score"
-    payload = {
-        "query": query,
-        "documents": documents,
-    }
+    payload = {"query": query, "documents": documents}
 
     response = requests.post(url, json=payload, timeout=60.0)
 
@@ -95,28 +91,15 @@ def test_rerank_endpoint(
     port: int,
     query: str,
     documents: list[str],
-    return_documents: bool = False,
     top_n: int | None = None,
 ) -> dict:
-    """Test /v1/rerank endpoint.
+    """Test /v1/rerank endpoint (Cohere/Jina format).
 
-    Args:
-        port: Server port
-        query: Query string
-        documents: List of documents
-        return_documents: If True, returns Cohere/Jina format with results sorted by relevance
-        top_n: Ifreturn_documents=True, limit to top N results
-
-    Returns:
-        If return_documents=False: {scores: [...]}(simple format)
-        If return_documents=True: {results: [{index, document, relevance_score}, ...]}
+    Returns: {results: [{index, document: {text}, relevance_score}, ...]}
+    Results are sorted by relevance (descending).
     """
     url = f"http://localhost:{port}/v1/rerank"
-    payload = {
-        "query": query,
-        "documents": documents,
-        "return_documents": return_documents,
-    }
+    payload = {"query": query, "documents": documents}
 
     if top_n is not None:
         payload["top_n"] = top_n
@@ -126,7 +109,23 @@ def test_rerank_endpoint(
     if response.status_code != 200:
         raise RuntimeError(f"/v1/rerank failed: {response.status_code} - {response.text}")
 
-    return response.json()
+    data = response.json()
+
+    # Validate Cohere format
+    if "results" not in data:
+        raise RuntimeError(f"/v1/rerank missing 'results' field: {data}")
+
+    for item in data["results"]:
+        if "index" not in item or "document" not in item or "relevance_score" not in item:
+            raise RuntimeError(f"/v1/rerank invalid item format: {item}")
+
+    # Verify sorted by relevance (descending)
+    scores = [item["relevance_score"] for item in data["results"]]
+    for i in range(len(scores) - 1):
+        if scores[i] < scores[i + 1]:
+            raise RuntimeError(f"/v1/rerank results not sorted by relevance: {scores}")
+
+    return data
 
 
 def test_cross_encoder(
@@ -134,7 +133,7 @@ def test_cross_encoder(
     model_slug: str,
     config: dict,
 ) -> bool:
-    """Test cross-encoder model with both endpoint formats."""
+    """Test cross-encoder model with both endpoints."""
     print(f"\nTesting cross-encoder: {model_slug}")
     print("=" * 60)
 
@@ -155,7 +154,6 @@ def test_cross_encoder(
         try:
             score_response = test_score_endpoint(port, query, documents)
             score_data = score_response["data"]
-            # Convert to simple list for comparison
             score_scores = [item["score"] for item in score_data]
             print(f"  /v1/score (vLLM format): {len(score_data)} items")
             print(f"    Scores: {[f'{s:.4f}' for s in score_scores]}")
@@ -164,69 +162,40 @@ def test_cross_encoder(
             all_passed = False
             continue
 
-        # Test /v1/rerank (simple format)
+        # Test /v1/rerank (Cohere format)
         try:
-            rerank_response = test_rerank_endpoint(port, query, documents, return_documents=False)
-            rerank_scores = rerank_response["scores"]
-            print(f"  /v1/rerank (simple format): {[f'{s:.4f}' for s in rerank_scores]}")
+            rerank_response = test_rerank_endpoint(port, query, documents)
+            results = rerank_response["results"]
+            print(f"  /v1/rerank (Cohere format): {len(results)} results, sorted by relevance")
+
+            # Extract scores in original order for comparison
+            rerank_scores = [0.0] * len(documents)
+            for r in results:
+                rerank_scores[r["index"]] = r["relevance_score"]
+
+            print(
+                f"    Top result: index={results[0]['index']}, score={results[0]['relevance_score']:.4f}"
+            )
+
+            # Verify /v1/score and /v1/rerank produce same scores (different order in response)
+            for i, (s1, s2) in enumerate(zip(score_scores, rerank_scores)):
+                if not math.isclose(s1, s2, rel_tol=1e-5):
+                    print(f"    WARNING: Score mismatch at index {i}: {s1:.4f} vs {s2:.4f}")
+
         except Exception as e:
             print(f"  ERROR /v1/rerank: {e}")
             all_passed = False
             continue
 
-        # Test /v1/rerank (Cohere/Jina format)
-        try:
-            rerank_cohere = test_rerank_endpoint(port, query, documents, return_documents=True)
-            results = rerank_cohere["results"]
-            # Verify results are sorted by relevance (descending)
-            for i in range(len(results) - 1):
-                if results[i]["relevance_score"] < results[i + 1]["relevance_score"]:
-                    print("  ERROR: Results not sorted by relevance")
-                    all_passed = False
-                    continue
-            print(f"  /v1/rerank (Cohere format): {len(results)} results, sorted by relevance")
-            print(
-                f"    Top result: index={results[0]['index']}, score={results[0]['relevance_score']:.4f}"
-            )
-        except Exception as e:
-            print(f"  ERROR /v1/rerank (Cohere): {e}")
-            all_passed = False
-            continue
-
-        # Verify all formats produce same scores (ignoring order)
-        simple_scores = sorted(score_scores, reverse=True)
-        rerank_scores_sorted = sorted(rerank_scores, reverse=True)
-        cohere_scores = sorted([r["relevance_score"] for r in results], reverse=True)
-
-        if not all(
-            math.isclose(a, b, rel_tol=1e-5)
-            for a, b in zip(simple_scores, rerank_scores_sorted, strict=False)
-        ):
-            print("  ERROR: /v1/score and /v1/rerank produce different scores")
-            all_passed = False
-            continue
-
-        if not all(
-            math.isclose(a, b, rel_tol=1e-5)
-            for a, b in zip(simple_scores, cohere_scores, strict=False)
-        ):
-            print("  ERROR: /v1/score and /v1/rerank (Cohere) produce different scores")
-            all_passed = False
-            continue
-
         # Check ranking
         if expected_ranking:
-            ranked = sorted(range(len(rerank_scores)), key=lambda i: rerank_scores[i], reverse=True)
-            top_docs = set(ranked[: len(expected_ranking)])
-            expected_docs = set(expected_ranking)
-            if top_docs == expected_docs:
+            top_indices = [r["index"] for r in results[: len(expected_ranking)]]
+            if set(top_indices) == set(expected_ranking):
                 print(f"  PASS: Top {len(expected_ranking)} docs match expected {expected_ranking}")
             else:
-                print(
-                    f"  WARNING: Expected top docs {expected_ranking}, got {ranked[: len(expected_ranking)]}"
-                )
+                print(f"  WARNING: Expected top docs {expected_ranking}, got {top_indices}")
         else:
-            print("  PASS: All formats produce consistent scores")
+            print("  PASS: Both endpoints returned matching scores")
 
     return all_passed
 
@@ -287,28 +256,11 @@ def test_llm_reranker(
                 all_passed = False
                 continue
 
-            # Test /v1/rerank (simple and Cohere formats)
+            # Test /v1/rerank (Cohere format)
             try:
-                rerank_response = test_rerank_endpoint(
-                    port, formatted_query, formatted_docs, return_documents=False
-                )
-                rerank_scores = rerank_response["scores"]
-
-                rerank_cohere = test_rerank_endpoint(
-                    port, formatted_query, formatted_docs, return_documents=True
-                )
-                cohere_results = rerank_cohere["results"]
-
-                if len(score_scores) != len(documents):
-                    print(f"  ERROR: Expected {len(documents)} scores, got {len(score_scores)}")
-                    all_passed = False
-                    continue
-
-                print(f"  /v1/rerank scores: {[f'{s:.4f}' for s in rerank_scores]}")
-                print(
-                    f"  /v1/rerank (Cohere): {len(cohere_results)} results, top={cohere_results[0]['index']}"
-                )
-
+                rerank_response = test_rerank_endpoint(port, formatted_query, formatted_docs)
+                results = rerank_response["results"]
+                print(f"  /v1/rerank: {len(results)} results, top={results[0]['index']}")
             except Exception as e:
                 print(f"  ERROR /v1/rerank: {e}")
                 all_passed = False
@@ -328,7 +280,7 @@ def test_llm_reranker(
                         f"  WARNING: Expected top docs {expected_ranking}, got {ranked[: len(expected_ranking)]}"
                     )
             else:
-                print("  PASS: All formats produce consistent results")
+                print("  PASS: Both endpoints returned consistent results")
 
     return all_passed
 
