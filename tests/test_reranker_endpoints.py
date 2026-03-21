@@ -6,6 +6,10 @@ Tests two endpoints:
 - /v1/rerank: Cohere format {results: [{index, document, relevance_score}, ...]} - sorted by relevance
 
 Test harness reads configuration from tests/fixtures/test_rerankers.yaml.
+
+Usage:
+    pytest tests/test_reranker_endpoints.py::TestRerankerEndpoints -v
+    python tests/test_reranker_endpoints.py --model DiTy/cross-encoder-russian-msmarco
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ import math
 import time
 from pathlib import Path
 
+import pytest
 import requests
 import yaml
 
@@ -61,7 +66,7 @@ def format_llm_document(doc: str, config: dict) -> str:
     )
 
 
-def test_score_endpoint(port: int, query: str, documents: list[str]) -> dict:
+def check_score_endpoint(port: int, query: str, documents: list[str]) -> dict:
     """Test /v1/score endpoint (vLLM format).
 
     Returns: {data: [{index, object, score}, ...]}
@@ -87,7 +92,7 @@ def test_score_endpoint(port: int, query: str, documents: list[str]) -> dict:
     return data
 
 
-def test_rerank_endpoint(
+def check_rerank_endpoint(
     port: int,
     query: str,
     documents: list[str],
@@ -128,7 +133,7 @@ def test_rerank_endpoint(
     return data
 
 
-def test_cross_encoder(
+def run_cross_encoder_tests(
     port: int,
     model_slug: str,
     config: dict,
@@ -152,7 +157,7 @@ def test_cross_encoder(
 
         # Test /v1/score (vLLM format)
         try:
-            score_response = test_score_endpoint(port, query, documents)
+            score_response = check_score_endpoint(port, query, documents)
             score_data = score_response["data"]
             score_scores = [item["score"] for item in score_data]
             print(f"  /v1/score (vLLM format): {len(score_data)} items")
@@ -164,7 +169,7 @@ def test_cross_encoder(
 
         # Test /v1/rerank (Cohere format)
         try:
-            rerank_response = test_rerank_endpoint(port, query, documents)
+            rerank_response = check_rerank_endpoint(port, query, documents)
             results = rerank_response["results"]
             print(f"  /v1/rerank (Cohere format): {len(results)} results, sorted by relevance")
 
@@ -208,7 +213,7 @@ def test_cross_encoder(
     return all_passed
 
 
-def test_llm_reranker(
+def run_llm_reranker_tests(
     port: int,
     model_slug: str,
     model_subtype: str,
@@ -255,7 +260,7 @@ def test_llm_reranker(
 
             # Test /v1/score (vLLM format)
             try:
-                score_response = test_score_endpoint(port, formatted_query, formatted_docs)
+                score_response = check_score_endpoint(port, formatted_query, formatted_docs)
                 score_data = score_response["data"]
                 score_scores = [item["score"] for item in score_data]
                 print(f"  /v1/score scores: {[f'{s:.4f}' for s in score_scores]}")
@@ -266,7 +271,7 @@ def test_llm_reranker(
 
             # Test /v1/rerank (Cohere format)
             try:
-                rerank_response = test_rerank_endpoint(port, formatted_query, formatted_docs)
+                rerank_response = check_rerank_endpoint(port, formatted_query, formatted_docs)
                 results = rerank_response["results"]
                 print(f"  /v1/rerank: {len(results)} results, top={results[0]['index']}")
             except Exception as e:
@@ -293,7 +298,7 @@ def test_llm_reranker(
     return all_passed
 
 
-def test_reranker_endpoints(
+def run_reranker_tests(
     model_slug: str = "DiTy/cross-encoder-russian-msmarco",
     port: int = 7998,
 ) -> bool:
@@ -371,13 +376,13 @@ def test_reranker_endpoints(
     # Run tests based on model type
     try:
         if model_type == "cross_encoder":
-            result = test_cross_encoder(port, model_slug, config)
+            result = run_cross_encoder_tests(port, model_slug, config)
         elif model_type == "llm_reranker":
             if not model_subtype:
                 print("ERROR: llm_reranker requires subtype")
                 result = False
             else:
-                result = test_llm_reranker(port, model_slug, model_subtype, config)
+                result = run_llm_reranker_tests(port, model_slug, model_subtype, config)
         else:
             print(f"ERROR: Unknown model type: {model_type}")
             result = False
@@ -393,6 +398,26 @@ def test_reranker_endpoints(
     print("=" * 70)
 
     return result
+
+
+class TestRerankerEndpoints:
+    """Pytest test class for reranker endpoints."""
+
+    @pytest.mark.integration
+    def test_dity_cross_encoder(self):
+        """Test DiTy cross-encoder with both endpoints."""
+        assert run_reranker_tests("DiTy/cross-encoder-russian-msmarco", 7998)
+
+    @pytest.mark.integration
+    def test_bge_m3_cross_encoder(self):
+        """Test BGE-m3 cross-encoder with both endpoints."""
+        assert run_reranker_tests("BAAI/bge-reranker-v2-m3", 7998)
+
+    @pytest.mark.integration
+    @pytest.mark.slow
+    def test_qwen3_llm_reranker(self):
+        """Test Qwen3 LLM reranker with pre-formatted input."""
+        assert run_reranker_tests("Qwen/Qwen3-Reranker-0.6B", 7998)
 
 
 if __name__ == "__main__":
@@ -411,5 +436,5 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    success = test_reranker_endpoints(args.model, args.port)
+    success = run_reranker_tests(args.model, args.port)
     exit(0 if success else 1)
