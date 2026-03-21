@@ -322,8 +322,8 @@ class RerankerWorker(Worker):
                 self.tokenizer.pad_token = self.tokenizer.eos_token
 
             # Get scoring token IDs from config
-            # For softmax: {true: "yes", false: "no"} -> need both tokens
-            # For raw_logit: {true: "Yes"} -> only need true token
+            # For softmax: scoring_tokens has 'true' and 'false' keys
+            # For raw_logit: scoring_tokens has only 'true' key
             if self.scoring_tokens:
                 self.token_true_id = self.tokenizer.convert_tokens_to_ids(self.scoring_tokens.get("true", "yes"))
                 if "false" in self.scoring_tokens:
