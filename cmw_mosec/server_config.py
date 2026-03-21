@@ -175,6 +175,17 @@ class MosecModelConfig(BaseModel):
     pooling: Literal["mean", "cls", "last_token"] = Field(
         default="mean", description="Pooling method (mean/cls/last_token)"
     )
+    # Reranker-specific fields
+    reranker_type: Literal["cross_encoder", "llm_reranker"] | None = Field(
+        default=None, description="Reranker type (cross_encoder or llm_reranker)"
+    )
+    scoring_method: Literal["softmax", "raw_logit"] | None = Field(
+        default=None, description="Scoring method for llm_reranker (softmax or raw_logit)"
+    )
+    scoring_tokens: dict[str, str] | None = Field(
+        default=None, description="Tokens for scoring (e.g., {true: 'yes', false: 'no'})"
+    )
+    max_length: int | None = Field(default=None, description="Max sequence length (rerankers)")
 
     @field_validator("workers", mode="before")
     @classmethod

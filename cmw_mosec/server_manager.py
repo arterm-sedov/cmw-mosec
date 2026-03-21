@@ -273,6 +273,16 @@ class EmbeddingWorker(Worker):
             raise ValueError(f"max_length not configured for reranker model {reranker_model}")
 
         reranker_type = config.get("reranker_type", "cross_encoder")
+        scoring_method = config.get("scoring_method")
+        scoring_tokens = config.get("scoring_tokens", {})
+
+        # Format scoring_method for embedding in generated code
+        scoring_method_str = f'"{scoring_method}"' if scoring_method else "None"
+
+        # Format scoring_tokens for embedding in generated code
+        scoring_tokens_str = "None"
+        if scoring_tokens:
+            scoring_tokens_str = str(scoring_tokens)
 
         reranker_code = f'''
 import json
@@ -287,45 +297,49 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 RERANKER_MODEL = "{reranker_model}"
 MAX_LENGTH = {reranker_max_length}
 RERANKER_TYPE = "{reranker_type}"
+SCORING_METHOD = {scoring_method_str}
+SCORING_TOKENS = {scoring_tokens_str}
 
 
 class RerankerWorker(Worker):
     def __init__(self):
         self.model_name = RERANKER_MODEL
         self.max_length = MAX_LENGTH
-        # Determine model type from config
-        self.is_qwen3 = RERANKER_TYPE == "causal_lm"
+        self.reranker_type = RERANKER_TYPE
+        self.scoring_method = SCORING_METHOD
+        self.scoring_tokens = SCORING_TOKENS
 
-        if self.is_qwen3:
-            # Use AutoModelForCausalLM for Qwen3 reranker models
+        if self.reranker_type == "llm_reranker":
+            # Use AutoModelForCausalLM for LLM-based rerankers
+            # Models like Qwen3-Reranker, BGE-Gemma that use language models
             from transformers import AutoTokenizer, AutoModelForCausalLM
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, padding_side='left')
             self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
             self.model.eval()
 
-            # Set pad token if not set (Qwen3 tokenizer may not have pad token initially)
+            # Set pad token if not set
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
 
-            # Get token IDs for yes/no
-            self.token_true_id = self.tokenizer.convert_tokens_to_ids("yes")
-            self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")
-
-            # Prefix and suffix from Qwen3-Reranker model card
-            # https://huggingface.co/Qwen/Qwen3-Reranker-0.6B
-            # Fixed system message for Qwen3 reranker (model-specific, not configurable)
-            self.prefix = "<|im_start|>system\\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \\"yes\\" or \\"no\\".<|im_end|>\\n<|im_start|>user\\n"
-            self.suffix = "<|im_end|>\\n<|im_start|>assistant\\n\\n\\n\\n\\n"
-            self.prefix_tokens = self.tokenizer.encode(self.prefix, add_special_tokens=False)
-            self.suffix_tokens = self.tokenizer.encode(self.suffix, add_special_tokens=False)
+            # Get scoring token IDs from config
+            # For softmax: {true: "yes", false: "no"} -> need both tokens
+            # For raw_logit: {true: "Yes"} -> only need true token
+            if self.scoring_tokens:
+                self.token_true_id = self.tokenizer.convert_tokens_to_ids(self.scoring_tokens.get("true", "yes"))
+                if "false" in self.scoring_tokens:
+                    self.token_false_id = self.tokenizer.convert_tokens_to_ids(self.scoring_tokens["false"])
+                else:
+                    self.token_false_id = None
+            else:
+                # Default to yes/no for backward compatibility
+                self.token_true_id = self.tokenizer.convert_tokens_to_ids("yes")
+                self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")
         else:
-            # Use sentence_transformers CrossEncoder for standard models (DiTy, BGE, etc.)
+            # cross_encoder: Use sentence_transformers CrossEncoder
             from sentence_transformers import CrossEncoder
             self.model = CrossEncoder(self.model_name)
-            # Fix for padding token issue
             if self.model.tokenizer.pad_token is None:
                 self.model.tokenizer.pad_token = self.model.tokenizer.eos_token
-            # Set tokenizer max_length from config
             self.model.tokenizer.model_max_length = self.max_length
 
     def deserialize(self, data: bytes) -> dict[str, Any]:
@@ -336,56 +350,39 @@ class RerankerWorker(Worker):
 
     def forward(self, data: dict[str, Any]) -> dict[str, Any]:
         query = data["query"]
-        # Accept both "docs" and "documents" field names
         docs = data.get("docs") or data.get("documents")
-        # Use client-provided max_length or fall back to config default
         effective_max_length = data.get("max_length") or self.max_length
 
-        if self.is_qwen3:
-            # Qwen3-specific processing - use client instruction or empty string if none provided
-            # This ensures the server is agnostic and doesn't impose semantic bias
-            if "instruction" in data:
-                instruction = data["instruction"]
-                # Handle null/explicitly None instruction
-                if instruction is None:
-                    instruction = ""
-            else:
-                # No instruction field provided - use empty string
-                instruction = ""
+        if self.reranker_type == "llm_reranker":
+            # LLM reranker: client sends pre-formatted query and documents
+            # Server pairs them: query + doc for each document
+            # No server-side formatting - client handles all prefix/suffix/instruction
 
-            pairs = []
-            for doc in docs:
-                # Format according to Qwen3 documentation
-                output = f"<Instruct>: {{instruction}}\\n<Query>: {{query}}\\n<Document>: {{doc}}".format(instruction=instruction, query=query, doc=doc)
-                pairs.append(output)
+            pairs = [query + doc for doc in docs]
 
-            # Tokenize inputs
             inputs = self.tokenizer(
-                pairs, padding=False, truncation='longest_first',
-                return_attention_mask=False, max_length=effective_max_length
+                pairs, padding=True, truncation=True,
+                return_tensors="pt", max_length=effective_max_length
             )
-            # Add prefix and suffix tokens
-            for i, ele in enumerate(inputs['input_ids']):
-                inputs['input_ids'][i] = self.prefix_tokens + ele + self.suffix_tokens
-            inputs = self.tokenizer.pad(inputs, padding=True, return_tensors="pt", max_length=effective_max_length+len(self.prefix_tokens)+len(self.suffix_tokens))
-
-            # Move to same device as model
             inputs = {{k: v.to(self.model.device) for k, v in inputs.items()}}
 
-            # Get predictions
             with torch.no_grad():
                 batch_scores = self.model(**inputs).logits[:, -1, :]
-                true_vector = batch_scores[:, self.token_true_id]
-                false_vector = batch_scores[:, self.token_false_id]
-                batch_scores = torch.stack([false_vector, true_vector], dim=1)
-                batch_scores = torch.nn.functional.log_softmax(batch_scores, dim=1)
-                scores = batch_scores[:, 1].exp().tolist()
+
+                if self.scoring_method == "softmax":
+                    # Softmax over [false_token, true_token], return probability of true
+                    true_vector = batch_scores[:, self.token_true_id]
+                    false_vector = batch_scores[:, self.token_false_id]
+                    stacked = torch.stack([false_vector, true_vector], dim=1)
+                    log_probs = torch.nn.functional.log_softmax(stacked, dim=1)
+                    scores = log_probs[:, 1].exp().tolist()
+                else:
+                    # raw_logit: return raw logit for true token
+                    scores = batch_scores[:, self.token_true_id].tolist()
 
             return {{"scores": scores}}
         else:
-            # Standard sentence_transformers approach
-            # CrossEncoder uses tokenizer.model_max_length for truncation
-            # Temporarily override if client specifies different max_length
+            # cross_encoder: standard sentence_transformers approach
             original_max_length = self.model.tokenizer.model_max_length
             if effective_max_length != original_max_length:
                 self.model.tokenizer.model_max_length = effective_max_length
@@ -570,6 +567,7 @@ if __name__ == "__main__":
     # Register reranker endpoint
     if "RerankerWorker" in globals():
         routes["/v1/rerank"] = [Runtime(RerankerWorker)]
+        routes["/v1/score"] = [Runtime(RerankerWorker)]  # Alias for vLLM compatibility
 
     # Register guard endpoint
     if "GuardWorker" in globals():

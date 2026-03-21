@@ -84,39 +84,65 @@ reranker_models:
     max_length: 8192
     description: "Multilingual reranker based on BGE-M3"
 
+  # BGE-Gemma (LLM-based reranker using raw logit scoring)
+  # Client MUST format query as "A: {query}" and documents as "B: {doc}\n{prompt}"
+  BAAI/bge-reranker-v2-gemma:
+    model_id: BAAI/bge-reranker-v2-gemma
+    reranker_type: llm_reranker
+    scoring_method: raw_logit
+    scoring_tokens:
+      "true": "Yes"
+    dtype: float16
+    batch_size: 16
+    memory_gb: 8.0
+    workers: 1
+    max_length: 1024
+    description: "LLM reranker using Yes logit scoring"
+
   # Qwen3 Reranker Series (multilingual, 119+ languages)
+  # LLM-based reranker using yes/no softmax scoring
+  # Client MUST format query/documents with ChatML prefix/suffix before sending
   Qwen/Qwen3-Reranker-0.6B:
     model_id: Qwen/Qwen3-Reranker-0.6B
-    reranker_type: causal_lm
+    reranker_type: llm_reranker
+    scoring_method: softmax
+    scoring_tokens:
+      "true": "yes"
+      "false": "no"
     dtype: float16
     batch_size: 32
     memory_gb: 2.0
     workers: 1
     max_length: 32768
-    default_instruction: "Given a web search query, retrieve relevant passages that answer the query"
-    description: "0.6B params, instruction-aware reranking"
+    description: "0.6B params, requires client-side ChatML formatting"
 
   Qwen/Qwen3-Reranker-4B:
     model_id: Qwen/Qwen3-Reranker-4B
-    reranker_type: causal_lm
+    reranker_type: llm_reranker
+    scoring_method: softmax
+    scoring_tokens:
+      "true": "yes"
+      "false": "no"
     dtype: float16
     batch_size: 16
     memory_gb: 12.0
     workers: 1
     max_length: 32768
-    default_instruction: "Given a web search query, retrieve relevant passages that answer the query"
-    description: "4B params, instruction-aware reranking"
+    description: "4B params, requires client-side ChatML formatting"
 
   Qwen/Qwen3-Reranker-8B:
     model_id: Qwen/Qwen3-Reranker-8B
-    reranker_type: causal_lm
+    reranker_type: llm_reranker
+    scoring_method: softmax
+    scoring_tokens:
+      "true": "yes"
+      "false": "no"
     dtype: float16
     batch_size: 8
     memory_gb: 22.0
     workers: 1
     max_length: 32768
-    default_instruction: "Given a web search query, retrieve relevant passages that answer the query"
-    description: "8B params, instruction-aware reranking"
+    description: "8B params, requires client-side ChatML formatting"
 
 ################################################################################
 # GUARD MODELS
