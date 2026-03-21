@@ -466,3 +466,75 @@ Same contract for mosec, vLLM, any provider.
 **Invariant:** FRIDA, DiTy, Qwen3Guard continue working unchanged.
 
 **Supersedes:** `.opencode/plans/20260320-reranker-unification.md`
+## Implementation Complete (March 21, 2026)
+
+### Final Contracts
+
+| Endpoint | Request | Response | Format |
+|----------|---------|----------|--------|
+| `/v1/score` | `{query, documents}` | `{data: [{index, object, score}, ...]}` | vLLM |
+| `/v1/rerank` | `{query, documents, top_n?}` | `{results: [{index, document, relevance_score}, ...]}` | Cohere/Jina |
+
+### Key Decisions
+
+1. **Industry-standard contracts**: Aligned with vLLM/Cohere/Jina APIs
+2. **Breaking change approved**: cmw-rag will be refactored
+3. **Client-side formatting**: All prefix/suffix/instruction moved to client (cmw-rag)
+4. **Server is agnostic**: Accepts pre-formatted strings, returns scores
+
+### Breaking Changes
+
+- `/v1/score` returns vLLM format (not simple `{scores: [...]}`)
+- `/v1/rerank` returns Cohere format (not simple `{scores: [...]}`)
+- No backward compatibility - cmw-rag refactor required
+
+### Files Changed
+
+| File | Purpose |
+|------|---------|
+| `cmw_mosec/server_manager.py` | ScoreWorker, RerankerWorker with `_compute_scores()` |
+| `cmw_mosec/server_config.py` | Added `reranker_type`, `scoring_method`, `scoring_tokens` |
+| `cmw_mosec/cli.py` | Updated for new response formats |
+| `config/models.yaml` | Server-side model configs (no formatting) |
+| `tests/fixtures/test_rerankers.yaml` | Test harness with formatting templates |
+| `tests/test_reranker_endpoints.py` | Endpoint tests |
+
+### What Was NOT Changed
+
+- FRIDA embedder (`/v1/embeddings`) - unchanged
+- Qwen3Guard (`/v1/moderate`) - unchanged
+- DiTy cross-encoder logic - same `_compute_scores()` method
+
+### Scores Identical
+
+Both `/v1/score` and `/v1/rerank` use the same underlying `_compute_scores()` method:
+- `/v1/score`: Raw scores in original order, wrapped in `{data: [...]}`
+- `/v1/rerank`: Scores sorted by relevance, wrapped in `{results: [...]}`
+
+### Test Results
+
+```
+✅ /v1/score scores == /v1/rerank relevance_scores (identical values)
+✅ Server config tests: 27 passed
+✅ Endpoint tests: All passed
+✅ CLI check-rerank: All passed
+⏳ Qwen3: Test harness ready, requires model download to test
+```
+
+### Commits (8)
+
+1. feat: add /v1/score endpoint, refactor rerankers for client-side formatting
+2. fix: escape braces in f-string comments
+3. feat: add test harness config and update CLI
+4. feat: implement vLLM-compatible contracts
+5. refactor: clean industry-standard endpoint contracts
+6. refactor: align with vLLM/Cohere/Jina standards
+7. fix: fail test on score mismatch
+8. fix: update CLI for new contracts
+
+### Next Steps for cmw-rag
+
+1. Update InfinityReranker to format query/documents client-side
+2. Use `/v1/score` endpoint for reranking
+3. Add `query_template`, `doc_template`, `prefix`, `suffix` to model configs
+4. Handle both cross_encoder and llm_reranker model types
