@@ -2,6 +2,7 @@
 
 **Generated:** 2026-03-21
 **Period:** 2026-03-18 to 2026-03-21
+**Status:** VERIFIED - Integration tests passed
 
 This inventory lists all files changed in cmw-mosec during the reranker unification and Qwen3 embedding fixes.
 
@@ -206,3 +207,46 @@ config/models.yaml
 tests/test_reranker_endpoints.py
 pyproject.toml
 ```
+
+---
+
+## Integration Verification
+
+### Test Results (2026-03-21)
+
+**CMW-MOSEC Tests:**
+```
+tests/test_server_config.py: 27 passed in 0.09s
+```
+
+**CMW-RAG Tests:**
+```
+rag_engine/tests/test_retrieval_embedder.py: 2 skipped (requires model download)
+```
+
+**Integration Tests:**
+
+| Test | Provider | Status |
+|------|----------|--------|
+| Dimensions parameter | mosec local | ✓ Pass |
+| MRL truncation (512) | mosec local | ✓ Pass |
+| Native dimension (1024) | mosec local | ✓ Pass |
+| Dimension mismatch (4096 > 1024) | mosec local | ✓ Pass (400 error) |
+| CMW-RAG embedder | openrouter | ✓ Pass |
+
+**Key Verifications:**
+1. `dimensions` parameter sent from cmw-rag to all endpoints ✓
+2. Mosec validates dimensions against model max ✓
+3. Mosec truncates to requested dimension ✓
+4. CMW-RAG config dimensions match server response ✓
+
+---
+
+## Related Changes in CMW-RAG
+
+| Commit | Description |
+|--------|-------------|
+| `28bccb3` | Send dimensions parameter to embedding server |
+| `2a675d0` | Send dimensions to all endpoints (local and remote) |
+| `7691b4b` | Update report with completed dimensions fix |
+| `4142f11` | Add model sizing and API parameters analysis |
