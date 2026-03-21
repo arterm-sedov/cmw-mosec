@@ -22,11 +22,12 @@ embedding_models:
     memory_gb: 4.0
     workers: 1
     dimensions: 1536
+    max_length: 512  # FRIDA native max (from HF docs)
     model_class: T5EncoderModel  # T5-based model needs encoder-only
     query_prefix: "search_query: "
     doc_prefix: "search_document: "
     pooling: cls  # T5-based model requires CLS pooling
-    description: "Russian-optimized embedding, 1536 dimensions"
+    description: "Russian-optimized embedding, 1536 dim, 512 tokens max"
 
   # Qwen3 Embedding Series (multilingual, 119+ languages)
   # Supports OpenAI-compatible /v1/embeddings API with dimensions parameter for MRL

@@ -127,7 +127,7 @@ cmw-mosec check-guard-interactive
 
 | Model | Memory | Dimension | Pooling | Notes |
 |-------|--------|-----------|---------|-------|
-| `ai-forever/FRIDA` | ~4GB | 1536 | **cls** | Russian, 32K context, T5-based |
+| `ai-forever/FRIDA` | ~4GB | 1536 | **cls** | Russian, 512 tokens max, T5-based |
 | `Qwen/Qwen3-Embedding-0.6B` | ~2GB | 1024 | **last_token** | Multilingual (119+ langs), 32K, MRL [32-1024] |
 | `Qwen/Qwen3-Embedding-4B` | ~12GB | 2560 | **last_token** | Multilingual (119+ langs), 32K, MRL [32-2560] |
 | `Qwen/Qwen3-Embedding-8B` | ~22GB | 4096 | **last_token** | Multilingual (119+ langs), 32K, MRL [32-4096] |
@@ -252,6 +252,7 @@ query = get_detailed_instruct(task, 'What is Python?')
 
 **Architecture**: T5 encoder-decoder with CLS pooling  
 **Documentation**: [HuggingFace](https://huggingface.co/ai-forever/FRIDA)
+**Max tokens**: 512
 
 **Required Prefixes**:
 
