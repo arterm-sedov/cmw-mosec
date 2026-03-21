@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Test cmw-mosec reranker endpoints (/v1/score and /v1/rerank).
 
-This test suite verifies:
-1. Cross-encoder models (DiTy, BGE-m3) work with raw query/documents
-2. Both /v1/score and /v1/rerank endpoints return same results
-3. Response format matches vLLM-style raw scores
+Test harness reads configuration from tests/fixtures/test_rerankers.yaml.
+Tests both cross-encoder and LLM reranker models.
 
 Usage:
     pytest tests/test_reranker_endpoints.py -v
@@ -14,12 +12,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
+import math
 import time
+from pathlib import Path
 
 import requests
+import yaml
 
-from cmw_mosec.server_config import ModelRegistry, load_server_settings
+from cmw_mosec.server_config import ModelRegistry
 from cmw_mosec.server_manager import (
     MosecServerManager,
     _check_server_health,
@@ -27,7 +27,54 @@ from cmw_mosec.server_manager import (
 )
 
 
-def test_endpoint_format(port: int, endpoint: str, query: str, documents: list[str]) -> dict:
+def load_test_config() -> dict:
+    """Load test configuration from YAML file."""
+    config_path = Path(__file__).parent / "fixtures" / "test_rerankers.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Test config not found: {config_path}")
+
+    with open(config_path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def format_llm_query(
+    query: str,
+    instruction: str,
+    config: dict,
+) -> str:
+    """Format query for LLM reranker using template from config."""
+    template = config["query_template"]
+    prefix = config.get("prefix", "")
+
+    return template.format(
+        prefix=prefix,
+        instruction=instruction,
+        query=query,
+    )
+
+
+def format_llm_document(
+    doc: str,
+    config: dict,
+) -> str:
+    """Format document for LLM reranker using template from config."""
+    template = config["doc_template"]
+    suffix = config.get("suffix", "")
+    prompt = config.get("prompt", "")
+
+    return template.format(
+        doc=doc,
+        suffix=suffix,
+        prompt=prompt,
+    )
+
+
+def test_endpoint(
+    port: int,
+    endpoint: str,
+    query: str,
+    documents: list[str],
+) -> dict:
     """Test an endpoint and return the response."""
     url = f"http://localhost:{port}{endpoint}"
     payload = {
@@ -35,7 +82,7 @@ def test_endpoint_format(port: int, endpoint: str, query: str, documents: list[s
         "documents": documents,
     }
 
-    response = requests.post(url, json=payload, timeout=30.0)
+    response = requests.post(url, json=payload, timeout=60.0)
 
     if response.status_code != 200:
         raise RuntimeError(f"Endpoint {endpoint} failed: {response.status_code} - {response.text}")
@@ -43,224 +90,236 @@ def test_endpoint_format(port: int, endpoint: str, query: str, documents: list[s
     return response.json()
 
 
-def test_reranker_endpoints(
-    model_slug: str = "DiTy/cross-encoder-russian-msmarco",
-    port: int = 7998,
-):
-    """Test both /v1/score and /v1/rerank endpoints with a cross-encoder model."""
-    print("=" * 70)
-    print(f"Testing reranker endpoints with {model_slug}")
-    print("=" * 70)
+def test_cross_encoder(
+    port: int,
+    model_slug: str,
+    config: dict,
+) -> bool:
+    """Test cross-encoder model with raw query/documents."""
+    print(f"\nTesting cross-encoder: {model_slug}")
+    print("=" * 60)
 
-    manager = MosecServerManager()
-    registry = ModelRegistry()
-
-    # Verify model exists
-    try:
-        config = registry.get_reranker_config(model_slug)
-        print(f"\nModel: {config.model_id}")
-        print(f"Type: {config.reranker_type}")
-        print(f"Max Length: {config.max_length}")
-    except ValueError as e:
-        print(f"ERROR: Unknown model: {model_slug}")
-        print(f"Available rerankers: {registry.list_rerankers()}")
-        return False
-
-    # Stop any existing server
-    print("\n1. Stopping any existing server...")
-    manager.stop()
-    _remove_server_pid()
-
-    # Start server with only reranker
-    print(f"\n2. Starting server with {model_slug} on port {port}...")
-    success, failed = manager.start(
-        embedding_model=None,
-        reranker_model=model_slug,
-        guard_model=None,
-        background=True,
-    )
-
-    if not success:
-        print(f"ERROR: Failed to start server. Failed models: {failed}")
-        return False
-
-    # Wait for server ready
-    print("   Waiting for server to be ready...")
-    for i in range(60):
-        if _check_server_health(port, timeout=2.0):
-            print(f"   Server ready after {i + 1}s")
-            break
-        time.sleep(1)
-    else:
-        print("ERROR: Server did not become ready within 60s")
-        manager.stop()
-        return False
-
-    # Test queries
-    test_cases = [
-        {
-            "name": "English - Machine Learning",
-            "query": "What is machine learning?",
-            "documents": [
-                "Machine learning is a method of data analysis that automates analytical model building.",
-                "The weather is sunny today in San Francisco.",
-                "Deep learning is a subset of machine learning using neural networks.",
-            ],
-        },
-        {
-            "name": "Russian - Car/Auto",
-            "query": "машина",
-            "documents": [
-                "Автомобиль для перевозки грузов и пассажиров.",
-                "Куриное блюдо из тушёной курицы с овощами.",
-                "Новый автомобиль Teslamodel выпуск 2024 года.",
-            ],
-        },
-        {
-            "name": "English - Capital Cities",
-            "query": "What is the capital of France?",
-            "documents": [
-                "The capital of Brazil is Brasilia.",
-                "The capital of France is Paris, known for the Eiffel Tower.",
-                "Horses and cows are both animals found on farms.",
-            ],
-        },
-    ]
-
+    test_cases = config["cross_encoder"]["test_cases"]
     all_passed = True
 
     for test_case in test_cases:
-        print(f"\n3. Testing: {test_case['name']}")
-        print(f"   Query: {test_case['query']}")
-        print(f"   Documents: {len(test_case['documents'])}")
+        name = test_case["name"]
+        query = test_case["query"]
+        documents = test_case["documents"]
+        expected_ranking = test_case.get("expected_ranking", [])
+
+        print(f"\nTest: {name}")
+        print(f"  Query: {query}")
+        print(f"  Documents: {len(documents)}")
 
         # Test /v1/rerank
-        print("\n   Testing /v1/rerank...")
         try:
-            rerank_response = test_endpoint_format(
-                port, "/v1/rerank", test_case["query"], test_case["documents"]
-            )
+            rerank_response = test_endpoint(port, "/v1/rerank", query, documents)
             rerank_scores = rerank_response.get("scores", [])
-            print(f"   Scores: {rerank_scores}")
-
-            if len(rerank_scores) != len(test_case["documents"]):
-                print(
-                    f"   ERROR: Expected {len(test_case['documents'])} scores, got {len(rerank_scores)}"
-                )
-                all_passed = False
-                continue
         except Exception as e:
-            print(f"   ERROR: /v1/rerank failed: {e}")
+            print(f"  ERROR /v1/rerank: {e}")
             all_passed = False
             continue
 
         # Test /v1/score
-        print("\n   Testing /v1/score...")
         try:
-            score_response = test_endpoint_format(
-                port, "/v1/score", test_case["query"], test_case["documents"]
-            )
+            score_response = test_endpoint(port, "/v1/score", query, documents)
             score_scores = score_response.get("scores", [])
-            print(f"   Scores: {score_scores}")
-
-            if len(score_scores) != len(test_case["documents"]):
-                print(
-                    f"   ERROR: Expected {len(test_case['documents'])} scores, got {len(score_scores)}"
-                )
-                all_passed = False
-                continue
         except Exception as e:
-            print(f"   ERROR: /v1/score failed: {e}")
+            print(f"  ERROR /v1/score: {e}")
             all_passed = False
             continue
 
-        # Verify both endpoints return same scores (with floating-point tolerance)
-        print("\n   Comparing endpoints...")
-        import math
-
-        all_close = all(
-            math.isclose(a, b, rel_tol=1e-5) for a, b in zip(rerank_scores, score_scores)
-        )
-        if all_close:
-            print("   PASS: /v1/rerank and /v1/score return matching scores")
-        else:
-            print(f"   ERROR: Score mismatch!")
-            print(f"   /v1/rerank: {rerank_scores}")
-            print(f"   /v1/score:  {score_scores}")
+        # Compare endpoints
+        if len(rerank_scores) != len(documents) or len(score_scores) != len(documents):
+            print(f"  ERROR: Expected {len(documents)} scores")
             all_passed = False
+            continue
 
-    # Stop server
-    print("\n4. Stopping server...")
-    if manager.stop():
-        print("   Server stopped")
-    else:
-        print("   WARNING: Failed to stop server gracefully")
+        print(f"  /v1/rerank scores: {[f'{s:.4f}' for s in rerank_scores]}")
+        print(f"  /v1/score scores:  {[f'{s:.4f}' for s in score_scores]}")
 
-    # Verify shutdown
-    time.sleep(2)
-    if not _check_server_health(port):
-        print("   Server shutdown verified")
-    else:
-        print("   WARNING: Server still responding")
+        # Check endpoints match
+        all_close = all(
+            math.isclose(a, b, rel_tol=1e-5)
+            for a, b in zip(rerank_scores, score_scores, strict=False)
+        )
+        if not all_close:
+            print("  ERROR: Endpoints returned different scores")
+            all_passed = False
+            continue
 
-    print("\n" + "=" * 70)
-    if all_passed:
-        print("All tests PASSED!")
-    else:
-        print("Some tests FAILED!")
-    print("=" * 70)
+        # Check ranking
+        ranked = sorted(range(len(rerank_scores)), key=lambda i: rerank_scores[i], reverse=True)
+        print(f"  Ranking: {ranked}")
+
+        if expected_ranking:
+            top_docs = set(ranked[: len(expected_ranking)])
+            expected_docs = set(expected_ranking)
+            if top_docs == expected_docs:
+                print(f"  PASS: Top {len(expected_ranking)} docs match expected")
+            else:
+                print(
+                    f"  WARNING: Expected top docs {expected_ranking}, got {ranked[: len(expected_ranking)]}"
+                )
+        else:
+            print("  PASS: Both endpoints returned matching scores")
 
     return all_passed
 
 
-def test_llm_reranker_preformatted(
-    model_slug: str = "Qwen/Qwen3-Reranker-0.6B",
-    port: int = 7998,
-):
-    """Test LLM reranker with pre-formatted query and documents.
+def test_llm_reranker(
+    port: int,
+    model_slug: str,
+    model_subtype: str,
+    config: dict,
+) -> bool:
+    """Test LLM reranker with pre-formatted query/documents."""
+    print(f"\nTesting LLM reranker: {model_slug}")
+    print(f"Subtype: {model_subtype}")
+    print("=" * 60)
 
-    For LLM rerankers, the client must format the query and documents
-    with the appropriate prefix/instruction/suffix BEFORE sending.
-
-    This test demonstrates the expected input format for llm_reranker models.
-    """
-    print("=" * 70)
-    print(f"Testing LLM reranker with pre-formatted input: {model_slug}")
-    print("=" * 70)
-
-    manager = MosecServerManager()
-    registry = ModelRegistry()
-
-    try:
-        config = registry.get_reranker_config(model_slug)
-        print(f"\nModel: {config.model_id}")
-        print(f"Type: {config.reranker_type}")
-        print(f"Scoring Method: {config.scoring_method}")
-        print(f"Scoring Tokens: {config.scoring_tokens}")
-    except ValueError as e:
-        print(f"ERROR: Unknown model: {model_slug}")
+    # Get formatting config for this model subtype
+    llm_config = config["llm_reranker"].get(model_subtype)
+    if not llm_config:
+        print(f"ERROR: No config found for subtype '{model_subtype}'")
+        print(f"Available subtypes: {list(config['llm_reranker'].keys())}")
         return False
 
-    # Qwen3-Reranker formatting (client-side)
-    # From model card: https://huggingface.co/Qwen/Qwen3-Reranker-0.6B
-    prefix = '<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
-    suffix = "<|im_end|>\n<|im_start|>assistant\n\n\n\n\n"
-    instruction = "Given a web search query, retrieve relevant passages that answer the query"
+    instructions = llm_config.get("instructions", [""])
+    test_cases = llm_config.get("test_cases", [])
 
-    # Format query with prefix and instruction
-    query = f"{prefix}<Instruct>: {instruction}\n<Query>: What is the capital of France?\n"
+    all_passed = True
 
-    # Format documents with suffix
-    documents = [
-        f"<Document>: The capital of Brazil is Brasilia.{suffix}",
-        f"<Document>: The capital of France is Paris, known for the Eiffel Tower.{suffix}",
-        f"<Document>: Horses and cows are both animals found on farms.{suffix}",
-    ]
+    for instruction in instructions:
+        print(
+            f"\nInstruction: {instruction[:50]}..."
+            if len(instruction) > 50
+            else f"\nInstruction: {instruction}"
+        )
 
-    print(f"\nFormatted query (first 100 chars): {query[:100]}...")
-    print(f"\nFormatted document 0 (first 100 chars): {documents[0][:100]}...")
+        for test_case in test_cases:
+            name = test_case["name"]
+            query = test_case["query"]
+            documents = test_case["documents"]
+            expected_ranking = test_case.get("expected_ranking", [])
 
-    # Stop and start server
+            print(f"\nTest: {name}")
+            print(f"  Query: {query}")
+
+            # Format query and documents
+            formatted_query = format_llm_query(query, instruction, llm_config)
+            formatted_docs = [format_llm_document(doc, llm_config) for doc in documents]
+
+            print(f"  Formatted query (first 80 chars): {formatted_query[:80]}...")
+            print(f"  Documents: {len(formatted_docs)}")
+
+            # Test /v1/score
+            try:
+                score_response = test_endpoint(port, "/v1/score", formatted_query, formatted_docs)
+                score_scores = score_response.get("scores", [])
+            except Exception as e:
+                print(f"  ERROR /v1/score: {e}")
+                all_passed = False
+                continue
+
+            if len(score_scores) != len(formatted_docs):
+                print(f"  ERROR: Expected {len(formatted_docs)} scores, got {len(score_scores)}")
+                all_passed = False
+                continue
+
+            print(f"  /v1/score scores: {[f'{s:.4f}' for s in score_scores]}")
+
+            # Test /v1/rerank with same formatted input
+            try:
+                rerank_response = test_endpoint(port, "/v1/rerank", formatted_query, formatted_docs)
+                rerank_scores = rerank_response.get("scores", [])
+            except Exception as e:
+                print(f"  ERROR /v1/rerank: {e}")
+                all_passed = False
+                continue
+
+            # Check endpoints match
+            all_close = all(
+                math.isclose(a, b, rel_tol=1e-5)
+                for a, b in zip(rerank_scores, score_scores, strict=False)
+            )
+            if not all_close:
+                print("  ERROR: Endpoints returned different scores")
+                all_passed = False
+                continue
+
+            # Check ranking
+            ranked = sorted(range(len(score_scores)), key=lambda i: score_scores[i], reverse=True)
+            print(f"  Ranking: {ranked}")
+
+            if expected_ranking:
+                top_docs = set(ranked[: len(expected_ranking)])
+                expected_docs = set(expected_ranking)
+                if top_docs == expected_docs:
+                    print(f"  PASS: Top {len(expected_ranking)} docs match expected")
+                else:
+                    print(
+                        f"  WARNING: Expected top docs {expected_ranking}, got {ranked[: len(expected_ranking)]}"
+                    )
+            else:
+                print("  PASS: Both endpoints returned matching scores")
+
+    return all_passed
+
+
+def test_reranker_endpoints(
+    model_slug: str = "DiTy/cross-encoder-russian-msmarco",
+    port: int = 7998,
+) -> bool:
+    """Test reranker endpoints with model from config."""
+    print("=" * 70)
+    print(f"Testing reranker endpoints: {model_slug}")
+    print("=" * 70)
+
+    # Load config
+    config = load_test_config()
+    registry = ModelRegistry()
+
+    # Get model type from config
+    model_mappings = config.get("model_mappings", {})
+    model_info = model_mappings.get(model_slug.lower(), {})
+
+    if not model_info:
+        # Try case-insensitive lookup
+        for key in model_mappings:
+            if key.lower() == model_slug.lower():
+                model_info = model_mappings[key]
+                break
+
+    if not model_info:
+        print(f"ERROR: Model '{model_slug}' not found in test config")
+        print("Available models:")
+        for slug in model_mappings:
+            print(f"  - {slug}")
+        return False
+
+    model_type = model_info["type"]
+    model_subtype = model_info.get("subtype")
+
+    print(f"\nModel type: {model_type}")
+    if model_subtype:
+        print(f"Subtype: {model_subtype}")
+
+    # Get model config for additional info
+    try:
+        model_config = registry.get_reranker_config(model_slug)
+        print(f"Max length: {model_config.max_length}")
+        if model_config.scoring_method:
+            print(f"Scoring method: {model_config.scoring_method}")
+        if model_config.scoring_tokens:
+            print(f"Scoring tokens: {model_config.scoring_tokens}")
+    except ValueError:
+        print(f"WARNING: Model not found in registry: {model_slug}")
+
+    # Start server
+    manager = MosecServerManager()
+
     print("\n1. Stopping any existing server...")
     manager.stop()
     _remove_server_pid()
@@ -278,7 +337,7 @@ def test_llm_reranker_preformatted(
         return False
 
     print("   Waiting for server...")
-    for i in range(120):  # LLM models take longer to load
+    for i in range(120):
         if _check_server_health(port, timeout=2.0):
             print(f"   Server ready after {i + 1}s")
             break
@@ -288,45 +347,28 @@ def test_llm_reranker_preformatted(
         manager.stop()
         return False
 
-    # Test with pre-formatted input
-    print("\n3. Testing /v1/score with pre-formatted input...")
+    # Run tests based on model type
     try:
-        response = test_endpoint_format(port, "/v1/score", query, documents)
-        scores = response.get("scores", [])
-        print(f"   Scores: {scores}")
-
-        if len(scores) != len(documents):
-            print(f"   ERROR: Expected {len(documents)} scores, got {len(scores)}")
-            manager.stop()
-            return False
-
-        # For Qwen3, scores should be probabilities (0-1)
-        # Document about Paris should have highest score
-        print(f"\n   Document ranking:")
-        for i, (doc, score) in enumerate(zip(documents, scores)):
-            print(f"   {i}: score={score:.4f}")
-
-        # Verify Paris document has highest score
-        if scores[1] > scores[0] and scores[1] > scores[2]:
-            print("\n   PASS: Paris document ranked highest")
+        if model_type == "cross_encoder":
+            result = test_cross_encoder(port, model_slug, config)
+        elif model_type == "llm_reranker":
+            if not model_subtype:
+                print("ERROR: llm_reranker requires subtype")
+                result = False
+            else:
+                result = test_llm_reranker(port, model_slug, model_subtype, config)
         else:
-            print("\n   WARNING: Expected Paris document to be ranked highest")
-
-        result = True
-
-    except Exception as e:
-        print(f"   ERROR: {e}")
-        result = False
-
-    # Stop server
-    print("\n4. Stopping server...")
-    manager.stop()
+            print(f"ERROR: Unknown model type: {model_type}")
+            result = False
+    finally:
+        print("\n3. Stopping server...")
+        manager.stop()
 
     print("\n" + "=" * 70)
     if result:
-        print("LLM reranker test PASSED!")
+        print("All tests PASSED!")
     else:
-        print("LLM reranker test FAILED!")
+        print("Some tests FAILED!")
     print("=" * 70)
 
     return result
@@ -340,16 +382,13 @@ if __name__ == "__main__":
         default="DiTy/cross-encoder-russian-msmarco",
         help="Reranker model to test",
     )
-    parser.add_argument("--port", type=int, default=7998, help="Server port")
     parser.add_argument(
-        "--llm", action="store_true", help="Test LLM reranker with pre-formatted input"
+        "--port",
+        type=int,
+        default=7998,
+        help="Server port",
     )
 
     args = parser.parse_args()
-
-    if args.llm:
-        success = test_llm_reranker_preformatted(args.model, args.port)
-    else:
-        success = test_reranker_endpoints(args.model, args.port)
-
+    success = test_reranker_endpoints(args.model, args.port)
     exit(0 if success else 1)

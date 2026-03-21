@@ -403,8 +403,23 @@ def check_embed(model: str | None) -> None:
 
 @cli.command(name="check-rerank")
 @click.option("--model", "-m", help="Reranker model to use (from running server if not specified)")
-def check_rerank(model: str | None) -> None:
-    """Test reranker model with preset examples (requires running server)."""
+@click.option(
+    "--endpoint",
+    "-e",
+    type=click.Choice(["rerank", "score", "both"]),
+    default="both",
+    help="Endpoint to test: rerank, score, or both (default: both)",
+)
+def check_rerank(model: str | None, endpoint: str) -> None:
+    """Test reranker model with examples from test config (requires running server).
+
+    Tests both /v1/rerank and /v1/score endpoints by default.
+    Uses test cases from tests/fixtures/test_rerankers.yaml.
+    """
+    from pathlib import Path
+
+    import yaml
+
     manager = MosecServerManager()
 
     if not manager.is_running():
@@ -420,114 +435,84 @@ def check_rerank(model: str | None) -> None:
         click.echo("Start server with --reranker flag")
         sys.exit(1)
 
+    # Load test config
+    config_path = Path(__file__).parent.parent / "tests" / "fixtures" / "test_rerankers.yaml"
+    if not config_path.exists():
+        click.echo(f"Error: Test config not found: {config_path}", err=True)
+        sys.exit(1)
+
+    with open(config_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    # Find model type
+    model_mappings = config.get("model_mappings", {})
+    model_info = None
+    for slug in model_mappings:
+        if slug.lower() == reranker_model.lower():
+            model_info = model_mappings[slug]
+            break
+
+    if not model_info:
+        click.echo(f"Warning: Model '{reranker_model}' not in test config, using defaults")
+        model_type = "cross_encoder"
+    else:
+        model_type = model_info["type"]
+
     status = manager.get_status()
-    endpoint = f"http://localhost:{status.port}/v1/rerank"
+    base_url = f"http://localhost:{status.port}"
 
-    test_cases = [
-        {
-            "query": "машина",
-            "documents": ["Автомобиль для перевозки грузов", "Погода в Москве", "Куриное блюдо"],
-        },
-        {
-            "query": "artificial intelligence",
-            "documents": [
-                "Paris is the capital of France",
-                "AI and deep learning are transforming technology",
-                "Python is a programming language",
-            ],
-        },
-    ]
-
-    click.echo(f"Testing reranker model: {reranker_model}")
-    click.echo(f"Endpoint: {endpoint}")
+    click.echo(f"Testing reranker: {reranker_model}")
+    click.echo(f"Model type: {model_type}")
+    click.echo(f"Endpoints: {endpoint}")
     click.echo()
+
+    # Get test cases based on model type
+    if model_type == "cross_encoder":
+        test_cases = config["cross_encoder"]["test_cases"]
+    elif model_type == "llm_reranker":
+        subtype = model_info.get("subtype", "qwen3")
+        llm_config = config["llm_reranker"].get(subtype, {})
+        test_cases = llm_config.get("test_cases", [])
+        # Use first instruction if available
+        if llm_config.get("instructions"):
+            click.echo(f"Using instruction: {llm_config['instructions'][0][:50]}...")
+    else:
+        test_cases = config["cross_encoder"]["test_cases"]
 
     try:
         for i, test_case in enumerate(test_cases, 1):
             query = test_case["query"]
             documents = test_case["documents"]
 
-            response = requests.post(
-                endpoint,
-                json={"query": query, "documents": documents},
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            result = response.json()
-
-            scores = result["scores"]
-            ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-
-            click.echo(f"--- Test {i} ---")
+            click.echo(f"--- Test {i}: {test_case.get('name', f'Query {i}')} ---")
             click.echo(f"Query: {query}")
-            click.echo("Ranked results:")
-            for rank, (idx, score) in enumerate(ranked, 1):
-                doc_preview = (
-                    documents[idx][:60] + "..." if len(documents[idx]) > 60 else documents[idx]
+
+            endpoints_to_test = []
+            if endpoint in ("rerank", "both"):
+                endpoints_to_test.append("/v1/rerank")
+            if endpoint in ("score", "both"):
+                endpoints_to_test.append("/v1/score")
+
+            for ep in endpoints_to_test:
+                response = requests.post(
+                    f"{base_url}{ep}",
+                    json={"query": query, "documents": documents},
+                    timeout=30.0,
                 )
-                click.echo(f"  {rank}. [{score:.4f}] {doc_preview}")
-            click.echo()
+                response.raise_for_status()
+                result = response.json()
 
-        click.echo("✓ All reranking tests passed!")
+                scores = result["scores"]
+                ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
 
-    except requests.RequestException as e:
-        click.echo(f"Error connecting to server: {e}", err=True)
-        sys.exit(1)
+                click.echo(f"\n{ep} scores: {[f'{s:.4f}' for s in scores]}")
+                click.echo("Ranked results:")
+                for rank, (idx, score) in enumerate(ranked, 1):
+                    doc_preview = (
+                        documents[idx][:50] + "..." if len(documents[idx]) > 50 else documents[idx]
+                    )
+                    click.echo(f"  {rank}. [{score:.4f}] {doc_preview}")
 
-    active = load_active_models()
-    reranker_model = model or active.get("reranker")
-
-    if not reranker_model:
-        click.echo("Error: No reranker model configured", err=True)
-        click.echo("Set ACTIVE_RERANKER_MODEL in .env")
-        sys.exit(1)
-
-    status = manager.get_status()
-    endpoint = f"http://localhost:{status.port}/v1/rerank"
-
-    test_cases = [
-        {
-            "query": "машина",
-            "documents": ["Автомобиль для перевозки грузов", "Погода в Москве", "Куриное блюдо"],
-        },
-        {
-            "query": "artificial intelligence",
-            "documents": [
-                "Paris is the capital of France",
-                "AI and deep learning are transforming technology",
-                "Python is a programming language",
-            ],
-        },
-    ]
-
-    click.echo(f"Testing reranker model: {reranker_model}")
-    click.echo(f"Endpoint: {endpoint}")
-    click.echo()
-
-    try:
-        for i, test_case in enumerate(test_cases, 1):
-            query = test_case["query"]
-            documents = test_case["documents"]
-
-            response = requests.post(
-                endpoint,
-                json={"query": query, "documents": documents},
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            result = response.json()
-
-            scores = result["scores"]
-            ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-
-            click.echo(f"--- Test {i} ---")
-            click.echo(f"Query: {query}")
-            click.echo("Ranked results:")
-            for rank, (idx, score) in enumerate(ranked, 1):
-                doc_preview = (
-                    documents[idx][:60] + "..." if len(documents[idx]) > 60 else documents[idx]
-                )
-                click.echo(f"  {rank}. [{score:.4f}] {doc_preview}")
             click.echo()
 
         click.echo("✓ All reranking tests passed!")
