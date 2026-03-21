@@ -1,0 +1,44 @@
+# Model combination test configurations
+test_scenarios:
+  - name: "emb_0.6b"
+    embedding: "Qwen/Qwen3-Embedding-0.6B"
+
+  - name: "emb_4b"
+    embedding: "Qwen/Qwen3-Embedding-4B"
+
+  - name: "emb_8b"
+    embedding: "Qwen/Qwen3-Embedding-8B"
+
+  - name: "rer_0.6b"
+    reranker: "Qwen/Qwen3-Reranker-0.6B"
+
+  - name: "rer_4b"
+    reranker: "Qwen/Qwen3-Reranker-4B"
+
+  - name: "rer_8b"
+    reranker: "Qwen/Qwen3-Reranker-8B"
+
+  - name: "guard_0.6b"
+    guard: "Qwen/Qwen3Guard-Gen-0.6B"
+
+  - name: "guard_4b"
+    guard: "Qwen/Qwen3Guard-Gen-4B"
+
+  - name: "3x_0.6b"
+    embedding: "Qwen/Qwen3-Embedding-0.6B"
+    reranker: "Qwen/Qwen3-Reranker-0.6B"
+    guard: "Qwen/Qwen3Guard-Gen-0.6B"
+
+  - name: "emb_4b_2x_0.6b"
+    embedding: "Qwen/Qwen3-Embedding-4B"
+    reranker: "Qwen/Qwen3-Reranker-0.6B"
+    guard: "Qwen/Qwen3Guard-Gen-0.6B"
+
+  - name: "emb_0.6b_rer_4b"
+    embedding: "Qwen/Qwen3-Embedding-0.6B"
+    reranker: "Qwen/Qwen3-Reranker-4B"
+
+  - name: "emb_0.6b_2x_4b"
+    embedding: "Qwen/Qwen3-Embedding-0.6B"
+    reranker: "Qwen/Qwen3-Reranker-4B"
+    guard: "Qwen/Qwen3Guard-Gen-4B"

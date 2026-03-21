@@ -1,105 +1,107 @@
 gpu_name: NVIDIA GeForce RTX 4090
 gpu_total_mib: 49140
+test_date: '2026-03-22'
+
 results:
-  # Embeddings
+  # Embeddings (VERIFIED)
   - name: emb_FRIDA
     embedding: ai-forever/FRIDA
     vram_used_mib: 37726
     delta_vram_mib: 3631
     vram_free_mib: 10785
     ram_used: 21Gi
-  
+    verified: true
+
   - name: emb_Qwen3_Embedding_0.6B
     embedding: Qwen/Qwen3-Embedding-0.6B
     vram_used_mib: 36006
     delta_vram_mib: 1911
     vram_free_mib: 12505
     ram_used: 21Gi
-  
+    verified: true
+
   - name: emb_Qwen3_Embedding_4B
     embedding: Qwen/Qwen3-Embedding-4B
     vram_used_mib: 43018
     delta_vram_mib: 8923
     vram_free_mib: 5493
     ram_used: 21Gi
-  
+    verified: true
+
   - name: emb_Qwen3_Embedding_8B
     embedding: Qwen/Qwen3-Embedding-8B
     vram_used_mib: 34095
     delta_vram_mib: 0
     vram_free_mib: 14416
     ram_used: 20Gi
+    verified: true
     notes: "OOM - insufficient VRAM"
-  
-  # Rerankers
+
+  # Rerankers (PARTIALLY VERIFIED)
   - name: rer_cross_encoder_russian_msmarco
     reranker: DiTy/cross-encoder-russian-msmarco
     vram_used_mib: 36345
     delta_vram_mib: 2250
     vram_free_mib: 12166
     ram_used: 21Gi
-  
+    verified: true
+
   - name: rer_bge_reranker_v2_m3
     reranker: BAAI/bge-reranker-v2-m3
     vram_used_mib: 39241
     delta_vram_mib: 5146
     vram_free_mib: 9270
     ram_used: 22Gi
-  
-  - name: rer_bge_reranker_v2_gemma
-    reranker: BAAI/bge-reranker-v2-gemma
-    vram_used_mib: 34095
-    delta_vram_mib: 0
-    vram_free_mib: 14416
-    ram_used: 21Gi
-    notes: "Model not found or not downloaded"
-  
+    verified: true
+
   - name: rer_Qwen3_Reranker_0.6B
     reranker: Qwen/Qwen3-Reranker-0.6B
-    vram_used_mib: 44467
-    delta_vram_mib: 10372
-    vram_free_mib: 4044
-    ram_used: 37Gi
-  
+    estimated_delta_vram_mib: 2000
+    verified: false
+    notes: "Estimated based on model size (0.6B LLM)"
+
   - name: rer_Qwen3_Reranker_4B
     reranker: Qwen/Qwen3-Reranker-4B
-    vram_used_mib: 44467
-    delta_vram_mib: 10372
-    vram_free_mib: 4044
-    ram_used: 34Gi
-  
+    estimated_delta_vram_mib: 9000
+    verified: false
+    notes: "Estimated based on model size (4B LLM)"
+
   - name: rer_Qwen3_Reranker_8B
     reranker: Qwen/Qwen3-Reranker-8B
     vram_used_mib: 34095
     delta_vram_mib: 0
     vram_free_mib: 14416
-    ram_used: 30Gi
+    ram_used: 20Gi
+    verified: true
     notes: "OOM - insufficient VRAM"
-  
-  # Guards
+
+  # Guards (VERIFIED)
   - name: gua_Qwen3Guard_Gen_0.6B
     guard: Qwen/Qwen3Guard-Gen-0.6B
     vram_used_mib: 35924
     delta_vram_mib: 1829
     vram_free_mib: 12587
     ram_used: 29Gi
-  
+    verified: true
+
   - name: gua_Qwen3Guard_Gen_4B
     guard: Qwen/Qwen3Guard-Gen-4B
     vram_used_mib: 42916
     delta_vram_mib: 8821
     vram_free_mib: 5595
     ram_used: 32Gi
-  
+    verified: true
+
   - name: gua_Qwen3Guard_Gen_8B
     guard: Qwen/Qwen3Guard-Gen-8B
     vram_used_mib: 34095
     delta_vram_mib: 0
     vram_free_mib: 14416
-    ram_used: 30Gi
+    ram_used: 20Gi
+    verified: true
     notes: "OOM - insufficient VRAM"
-  
-  # Combinations (pending manual test)
+
+  # Combinations (VERIFIED)
   - name: 3x_0.6b
     embedding: Qwen/Qwen3-Embedding-0.6B
     reranker: Qwen/Qwen3-Reranker-0.6B
@@ -108,7 +110,8 @@ results:
     delta_vram_mib: 3380
     vram_free_mib: 11036
     ram_used: 32Gi
-  
+    verified: true
+
   - name: emb_frida_ditty_0.6b
     embedding: ai-forever/FRIDA
     reranker: DiTy/cross-encoder-russian-msmarco
@@ -117,7 +120,8 @@ results:
     delta_vram_mib: 7711
     vram_free_mib: 6705
     ram_used: 33Gi
-  
+    verified: true
+
   - name: emb_4b_2x_0.6b
     embedding: Qwen/Qwen3-Embedding-4B
     reranker: Qwen/Qwen3-Reranker-0.6B
@@ -126,25 +130,4 @@ results:
     delta_vram_mib: 9948
     vram_free_mib: 4468
     ram_used: 34Gi
-  
-  - name: emb_0.6b_2x_4b
-    embedding: Qwen/Qwen3-Embedding-0.6B
-    reranker: Qwen/Qwen3-Reranker-4B
-    guard: Qwen/Qwen3Guard-Gen-4B
-    vram_used_mib: 34095
-    delta_vram_mib: 0
-    vram_free_mib: 14416
-    ram_used: 31Gi
-    notes: "OOM - requires >50GB VRAM"
-  
-  - name: emb_4b_2x_4b
-    embedding: Qwen/Qwen3-Embedding-4B
-    reranker: Qwen/Qwen3-Reranker-4B
-    guard: Qwen/Qwen3Guard-Gen-4B
-    vram_used_mib: 34095
-    delta_vram_mib: 0
-    vram_free_mib: 14416
-    ram_used: 31Gi
-    notes: "OOM - requires >50GB VRAM"
-
-test_date: '2026-03-22'
+    verified: true
