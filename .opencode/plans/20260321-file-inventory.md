@@ -1,10 +1,25 @@
-# File Inventory: March 18-21, 2026
+# File Inventory: March 18-22, 2026
 
-**Generated:** 2026-03-21
-**Period:** 2026-03-18 to 2026-03-21
-**Status:** VERIFIED - Integration tests passed
+**Generated:** 2026-03-22
+**Period:** 2026-03-18 to 2026-03-22
+**Status:** COMPLETE - All tests done
 
-This inventory lists all files changed in cmw-mosec during the reranker unification and Qwen3 embedding fixes.
+This inventory lists all files changed in cmw-mosec during the reranker unification, Qwen3 embedding fixes, and VRAM analysis.
+
+---
+
+## New in This Session
+
+### VRAM Memory Analysis
+- `.opencode/analysis/20260321-vram-analysis.md` - Complete VRAM analysis for all models
+- `model_memory_results.yaml` - Raw test results in YAML format
+- `scripts/test_model_memory.py` - Incremental test script (reads from config/models.yaml)
+
+### Key Findings
+- 8B models require >50GB VRAM (OOM on 48GB GPU)
+- Qwen3-Reranker uses ~10GB (more than expected)
+- Cross-encoder rerankers are lightweight (2-5GB)
+- Optimal config: emb 4B + rer 0.6B + guard 0.6B (~44GB, 4.5GB free)
 
 ---
 
