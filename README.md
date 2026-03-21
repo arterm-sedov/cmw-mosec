@@ -128,9 +128,9 @@ cmw-mosec check-guard-interactive
 | Model | Memory | Dimension | Pooling | Notes |
 |-------|--------|-----------|---------|-------|
 | `ai-forever/FRIDA` | ~4GB | 1536 | **cls** | Russian, 32K context, T5-based |
-| `Qwen/Qwen3-Embedding-0.6B` | ~2GB | 1024 | **last_token** | Multilingual (119+ langs), 32K, MRL |
-| `Qwen/Qwen3-Embedding-4B` | ~12GB | 2560 | **last_token** | Multilingual (119+ langs), 32K, MRL |
-| `Qwen/Qwen3-Embedding-8B` | ~22GB | 4096 | **last_token** | Multilingual (119+ langs), 32K, MRL |
+| `Qwen/Qwen3-Embedding-0.6B` | ~2GB | 1024 | **last_token** | Multilingual (119+ langs), 32K, MRL [32-1024] |
+| `Qwen/Qwen3-Embedding-4B` | ~12GB | 2560 | **last_token** | Multilingual (119+ langs), 32K, MRL [32-2560] |
+| `Qwen/Qwen3-Embedding-8B` | ~22GB | 4096 | **last_token** | Multilingual (119+ langs), 32K, MRL [32-4096] |
 
 **Important:** Pooling method is configured in `config/models.yaml`:
 - **cls**: Required for T5-based models (FRIDA)
@@ -246,7 +246,7 @@ query = get_detailed_instruct(task, 'What is Python?')
 - Documents don't need instruction prefix
 - Mosec automatically uses `last_token` pooling (configured in models.yaml)
 - Supports 119+ languages
-- MRL (Matryoshka Representation Learning) enabled
+- **MRL**: Use `dimensions` parameter to reduce embedding size (32 to native dimension)
 
 ### FRIDA (T5-Based)
 
@@ -309,6 +309,15 @@ curl -X POST http://localhost:8001/v1/embeddings \
     "input": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: What is AI?"
   }'
 
+# Qwen3 with MRL dimension truncation (OpenAI-compatible)
+curl -X POST http://localhost:8001/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-Embedding-0.6B",
+    "input": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: What is AI?",
+    "dimensions": 512
+  }'
+
 # FRIDA with prefix
 curl -X POST http://localhost:8001/v1/embeddings \
   -H "Content-Type: application/json" \
@@ -317,6 +326,12 @@ curl -X POST http://localhost:8001/v1/embeddings \
     "input": "search_query: Hello world!"
   }'
 ```
+
+**MRL (Matryoshka Representation Learning):**
+- Qwen3-Embedding models support `dimensions` parameter for truncating embeddings
+- Reduces dimension while preserving semantic quality
+- Valid range: `[32, native_dimension]`
+- Native dimensions: 0.6B=1024, 4B=2560, 8B=4096
 
 ### Rerank
 
