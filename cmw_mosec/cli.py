@@ -130,7 +130,8 @@ def serve(foreground: bool, embedding: str, reranker: str, guard: str) -> None:
         if emb_model:
             click.echo("  POST /v1/embeddings - Embeddings API")
         if rer_model:
-            click.echo("  POST /v1/rerank - Reranking API")
+            click.echo("  POST /v1/score - Score API (vLLM format)")
+            click.echo("  POST /v1/rerank - Rerank API (Cohere format)")
         if guard_model:
             click.echo("  POST /v1/moderate - Content moderation API")
     else:
@@ -232,6 +233,15 @@ def status() -> None:
         click.echo(f"  Guard: {loaded['guard']}")
     else:
         click.echo("  Guard: not configured")
+
+    click.echo("\nEndpoints:")
+    if loaded.get("embedding"):
+        click.echo("  POST /v1/embeddings - Embeddings API")
+    if loaded.get("reranker"):
+        click.echo("  POST /v1/score - Score API (vLLM format)")
+        click.echo("  POST /v1/rerank - Rerank API (Cohere format)")
+    if loaded.get("guard"):
+        click.echo("  POST /v1/moderate - Content moderation API")
 
 
 @cli.command()

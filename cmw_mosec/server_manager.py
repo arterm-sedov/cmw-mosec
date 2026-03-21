@@ -148,7 +148,16 @@ class EmbeddingWorker(Worker):
     def __init__(self):
         self.model_name = EMBEDDING_MODEL
         self.pooling = POOLING
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name)
+
+        # LLM-based embedders (Qwen3) need left padding for last_token pooling
+        # Encoder-based (FRIDA) use default right padding
+        if self.pooling == "last_token":
+            self.tokenizer = transformers.AutoTokenizer.from_pretrained(
+                self.model_name,
+                padding_side='left'
+            )
+        else:
+            self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name)
 
         # Load model class from config (e.g., T5EncoderModel for FRIDA, AutoModel for others)
         if MODEL_CLASS == "T5EncoderModel":
