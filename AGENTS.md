@@ -130,85 +130,48 @@ def test_embedding_config_valid():
    - Test edge cases and error handling
    - Example: Test "unknown model raises error", not "ValueError raised"
 
-### YAML-Driven Test Data
+### Integration Tests
 
-**Store test cases in YAML for reusability:**
-```yaml
-# tests/fixtures/test_rerankers.yaml
-cross_encoder:
-  test_cases:
-    - name: "English - Machine Learning"
-      query: "What is machine learning?"
-      documents:
-        - "Machine learning is a method of data analysis..."
-        - "The weather is sunny..."
-      expected_ranking: [0, 2]  # Indices of most relevant docs
-```
-
-**Load from YAML in tests:**
-```python
-def load_test_config() -> dict:
-    with open("tests/fixtures/test_rerankers.yaml") as f:
-        return yaml.safe_load(f)
-
-def test_cross_encoder():
-    config = load_test_config()
-    for test_case in config["cross_encoder"]["test_cases"]:
-        # Test with real data from YAML
-```
-
-### Integration Tests for Endpoints
-
-**For API endpoints, test actual HTTP requests:**
-```python
-class TestRerankerEndpoints:
-    @pytest.mark.integration
-    def test_dity_cross_encoder(self):
-        """Test DiTy cross-encoder with both /v1/score and /v1/rerank."""
-        # Start server, make HTTP requests, verify responses
-        assert run_reranker_tests("DiTy/cross-encoder-russian-msmarco", 7998)
-```
-
-**Use pytest markers for integration tests:**
-```toml
-# pyproject.toml
-[tool.pytest.ini_options]
-markers = [
-    "integration: marks tests as integration tests (require running server)",
-    "slow: marks tests as slow (require model downloads)",
-]
-```
+For endpoints, test actual HTTP requests. Use pytest markers for slow/integration tests.
 
 ### Cross-Model Testing
 
-**Test multiple models with same test logic:**
-```python
-class TestRerankerEndpoints:
-    @pytest.mark.integration
-    def test_dity_cross_encoder(self):
-        assert run_reranker_tests("DiTy/cross-encoder-russian-msmarco", 7998)
+Test multiple models with same logic. Don't duplicate test code.
 
-    @pytest.mark.integration
-    def test_bge_m3_cross_encoder(self):
-        assert run_reranker_tests("BAAI/bge-reranker-v2-m3", 7998)
+### Shared Logic Verification
 
-    @pytest.mark.integration
-    @pytest.mark.slow
-    def test_qwen3_llm_reranker(self):
-        assert run_reranker_tests("Qwen/Qwen3-Reranker-0.6B", 7998)
-```
+When multiple endpoints compute the same thing, verify they produce identical results.
 
-### Verify Identical Scores Across Endpoints
+## Design Principles
 
-**When multiple endpoints compute the same thing, verify they produce identical results:**
-```python
-# Both endpoints use same _compute_scores() internally
-# /v1/score returns: {data: [{index, score}, ...]}
-# /v1/rerank returns: {results: [{index, document, relevance_score}, ...]}
-# Extract scores and verify they match:
-for i, (s1, s2) in enumerate(zip(score_scores, rerank_scores)):
-    assert math.isclose(s1, s2, rel_tol=1e-5), f"Score mismatch at index {i}"
-```
+- **TDD:** Write tests first, define behavior contracts before implementation
+- **SDD:** Plan with specs, understand requirements before coding
+- **Non-breaking:** Never break existing functionality - verify all endpoints still work
+- **Lean:** Minimal code, no overengineering, delete unnecessary complexity
+- **Pythonic:** Follow Python idioms, use standard library, prefer clarity over cleverness
+- **Brilliant:** Simple solutions that work, not complex ones that impress
+
+## API Design
+
+Align with industry standards (vLLM, Cohere, OpenAI). Use established contracts. Don't invent custom formats.
+
+## DRY Principle
+
+Share logic across similar operations. If two endpoints compute the same thing, use one method.
+
+## Verification Checklist
+
+Before considering work complete:
+
+1. Tests pass
+2. Lint passes
+3. Shared logic (DRY)
+4. Configs in YAML
+5. Scores identical across endpoints
+6. All models tested
+7. CLI commands work
+8. Other endpoints unchanged
+9. README updated
 
 ## Error Handling
 
@@ -244,84 +207,6 @@ Test scenarios:
 - **Linting:** Only lint files that were modified, not the entire codebase. Be critical about Ruff reports; implement only necessary changes.
 - **Secrets:** Never hardcode secrets. Use environment variables.
 - **No breakage:** Never break existing code.
-
-## Industry-Standard API Design
-
-When implementing APIs, align with industry standards:
-
-1. **Use established contracts** - vLLM, Cohere, Jina, OpenAI
-2. **Document breaking changes** - If breaking compatibility, document clearly
-3. **Single source of truth** - Config in YAML, endpoints follow spec
-4. **Shared logic for similar operations** - DRY principle
-
-### Example: Reranker Endpoints
-
-```python
-# /v1/score - vLLM format (lightweight)
-# Request: {query, documents}
-# Response: {data: [{index, object: "score", score}, ...]}
-
-# /v1/rerank - Cohere format (sorted results)
-# Request: {query, documents, top_n?}
-# Response: {results: [{index, document: {text}, relevance_score}, ...]}
-
-# Both use same _compute_scores() method - DRY!
-```
-
-## DRY Principle
-
-**Don't Repeat Yourself** - Share logic across similar operations:
-
-```python
-# GOOD: Shared compute method
-class RerankerWorker:
-    def _compute_scores(self, query, docs) -> list:
-        # Shared scoring logic
-        ...
-
-    def forward(self, data) -> dict:
-        scores = self._compute_scores(query, docs)
-        return {"results": [...]}  # Cohere format
-
-class ScoreWorker(RerankerWorker):
-    def forward(self, data) -> dict:
-        scores = self._compute_scores(query, docs)
-        return {"data": [...]}  # vLLM format
-```
-
-## Plan Management
-
-- **Keep plan updated** - Document implementation complete status
-- **Document breaking changes** - Clearly note what changed
-- **No backward compatibility when not needed** - If breaking, document clearly
-- **Single source of truth** - Plan, README, and code should align
-
-### Example Plan Status
-
-```markdown
-## Status: ✅ COMPLETE
-
-All implementation complete. See "Implementation Complete" section for details.
-
-### Breaking Changes
-- `/v1/score` returns vLLM format (not simple {scores: [...]})
-- `/v1/rerank` returns Cohere format (not simple {scores: [...]})
-```
-
-## Verification Checklist
-
-Before considering work complete, verify:
-
-1. **Tests pass:** `pytest tests/ -v`
-2. **Lint passes:** `ruff check <modified_files>`
-3. **Shared logic:** DRY - no duplicated compute logic
-4. **YAML configs:** Test cases and formatting in YAML, not hardcoded
-5. **Scores identical:** Same underlying compute produces same values
-6. **All models tested:** Cross-model testing with same test logic
-7. **CLI works:** `cmw-mosec check-*` commands pass
-8. **Endpoints unchanged:** Other endpoints (embeddings, guard) still work
-9. **Plan updated:** Implementation status documented
-10. **README updated:** New endpoints and features documented
 
 ## Code Style
 
