@@ -97,12 +97,15 @@ def _generate_server_script(
     guard_code = ""
 
     guard_max_new_tokens = 128
+    guard_max_length = 32768
     if guard_model:
         try:
             guard_config = ModelRegistry().get_guard_config(guard_model)
             guard_max_new_tokens = guard_config.max_new_tokens or 128
+            guard_max_length = guard_config.max_length or 32768
         except ValueError:
             guard_max_new_tokens = 128
+            guard_max_length = 32768
 
     # Get pooling config for embedding model
     pooling_method = "mean"  # default
@@ -505,6 +508,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 GUARD_MODEL = "{guard_model}"
 DTYPE = "{settings.dtype}"
 MAX_NEW_TOKENS = {guard_max_new_tokens}
+MAX_LENGTH = {guard_max_length}
 
 SAFETY_CATEGORIES = [
     "Violent",
@@ -607,7 +611,7 @@ class GuardWorker(Worker):
             [prompt],
             return_tensors="pt",
             truncation=True,
-            max_length=32768
+            max_length=MAX_LENGTH
         )
 
         if torch.cuda.is_available():

@@ -153,11 +153,11 @@ cmw-mosec check-guard-interactive
 
 ### Guard Models
 
-| Model | Memory | Max Tokens | Notes |
-|-------|--------|------------|-------|
-| `Qwen/Qwen3Guard-Gen-0.6B` | ~4GB | 128 | 119 languages, generative guard |
-| `Qwen/Qwen3Guard-Gen-4B` | ~10GB | 128 | 119 languages, generative guard |
-| `Qwen/Qwen3Guard-Gen-8B` | ~20GB | 128 | 119 languages, generative guard |
+| Model | Memory | Context | Gen Tokens | Notes |
+|-------|--------|---------|------------|-------|
+| `Qwen/Qwen3Guard-Gen-0.6B` | ~4GB | 32K | 128 | 119 languages, generative guard |
+| `Qwen/Qwen3Guard-Gen-4B` | ~10GB | 32K | 128 | 119 languages, generative guard |
+| `Qwen/Qwen3Guard-Gen-8B` | ~20GB | 32K | 128 | 119 languages, generative guard |
 
 #### Safety Categories
 

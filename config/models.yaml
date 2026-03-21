@@ -171,9 +171,10 @@ guard_models:
     batch_size: 4
     memory_gb: 4.0
     workers: 1
+    max_length: 32768
     max_new_tokens: 128
     transformers_min_version: "4.51.0"
-    description: "0.6B params, 119 languages, generative guard"
+    description: "0.6B params, 119 languages, generative guard, 32K context"
 
   Qwen/Qwen3Guard-Gen-4B:
     model_id: Qwen/Qwen3Guard-Gen-4B
@@ -181,9 +182,10 @@ guard_models:
     batch_size: 4
     memory_gb: 10.0
     workers: 1
+    max_length: 32768
     max_new_tokens: 128
     transformers_min_version: "4.51.0"
-    description: "4B params, 119 languages, generative guard"
+    description: "4B params, 119 languages, generative guard, 32K context"
 
   Qwen/Qwen3Guard-Gen-8B:
     model_id: Qwen/Qwen3Guard-Gen-8B
@@ -191,6 +193,7 @@ guard_models:
     batch_size: 2
     memory_gb: 20.0
     workers: 1
+    max_length: 32768
     max_new_tokens: 128
     transformers_min_version: "4.51.0"
-    description: "8B params, 119 languages, generative guard"
+    description: "8B params, 119 languages, generative guard, 32K context"
