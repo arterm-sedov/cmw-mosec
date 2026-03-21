@@ -177,10 +177,17 @@ def test_cross_encoder(
                 f"    Top result: index={results[0]['index']}, score={results[0]['relevance_score']:.4f}"
             )
 
-            # Verify /v1/score and /v1/rerank produce same scores (different order in response)
+            # Verify /v1/score and /v1/rerank produce identical scores
+            score_mismatch = False
             for i, (s1, s2) in enumerate(zip(score_scores, rerank_scores)):
                 if not math.isclose(s1, s2, rel_tol=1e-5):
-                    print(f"    WARNING: Score mismatch at index {i}: {s1:.4f} vs {s2:.4f}")
+                    print(f"    ERROR: Score mismatch at index {i}: {s1:.6f} vs {s2:.6f}")
+                    score_mismatch = True
+
+            if score_mismatch:
+                print("  ERROR: /v1/score and /v1/rerank produce different scores")
+                all_passed = False
+                continue
 
         except Exception as e:
             print(f"  ERROR /v1/rerank: {e}")
@@ -193,9 +200,10 @@ def test_cross_encoder(
             if set(top_indices) == set(expected_ranking):
                 print(f"  PASS: Top {len(expected_ranking)} docs match expected {expected_ranking}")
             else:
-                print(f"  WARNING: Expected top docs {expected_ranking}, got {top_indices}")
+                print(f"  FAIL: Expected top docs {expected_ranking}, got {top_indices}")
+                all_passed = False
         else:
-            print("  PASS: Both endpoints returned matching scores")
+            print("  PASS: Both endpoints returned matching scores and consistent ranking")
 
     return all_passed
 
