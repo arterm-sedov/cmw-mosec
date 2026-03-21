@@ -139,13 +139,17 @@ cmw-mosec check-guard-interactive
 
 ### Reranker Models
 
-| Model | Memory | Notes |
-|-------|--------|-------|
-| `DiTy/cross-encoder-russian-msmarco` | ~2GB | Russian, MS-MARCO trained |
-| `BAAI/bge-reranker-v2-m3` | ~2GB | Multilingual |
-| `Qwen/Qwen3-Reranker-0.6B` | ~2GB | Multilingual (119+ langs), instruction-aware |
-| `Qwen/Qwen3-Reranker-4B` | ~12GB | Multilingual (119+ langs), instruction-aware |
-| `Qwen/Qwen3-Reranker-8B` | ~22GB | Multilingual (119+ langs), instruction-aware |
+| Model | Memory | Type | Notes |
+|-------|--------|------|-------|
+| `DiTy/cross-encoder-russian-msmarco` | ~2GB | cross_encoder | Russian, MS-MARCO trained |
+| `BAAI/bge-reranker-v2-m3` | ~2GB | cross_encoder | Multilingual |
+| `Qwen/Qwen3-Reranker-0.6B` | ~2GB | llm_reranker | Multilingual (119+ langs), requires client-side formatting |
+| `Qwen/Qwen3-Reranker-4B` | ~12GB | llm_reranker | Multilingual (119+ langs), requires client-side formatting |
+| `Qwen/Qwen3-Reranker-8B` | ~22GB | llm_reranker | Multilingual (119+ langs), requires client-side formatting |
+
+**Reranker Types:**
+- **cross_encoder**: Raw query/documents, no formatting needed
+- **llm_reranker**: Requires client-side formatting (prefix/suffix/instruction)
 
 ### Guard Models
 
@@ -316,14 +320,38 @@ curl -X POST http://localhost:8001/v1/embeddings \
 
 ### Rerank
 
+**Two endpoints available:**
+
 ```bash
+# /v1/score - Raw scores in original order (vLLM format)
+curl -X POST http://localhost:8001/v1/score \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What is AI?",
+    "documents": ["AI is artificial intelligence.", "The weather is sunny."]
+  }'
+
+# Response: {"data": [{"index": 0, "object": "score", "score": 0.95}, ...]}
+
+# /v1/rerank - Sorted results with documents (Cohere/Jina format)
 curl -X POST http://localhost:8001/v1/rerank \
   -H "Content-Type: application/json" \
   -d '{
     "query": "What is AI?",
     "documents": ["AI is artificial intelligence.", "The weather is sunny."]
   }'
+
+# Response: {"results": [{"index": 0, "document": {"text": "AI is..."}, "relevance_score": 0.95}, ...]}
 ```
+
+**Endpoint Comparison:**
+
+| Endpoint | Response | Use Case |
+|----------|----------|----------|
+| `/v1/score` | Raw scores, original order | Lightweight scoring, vLLM compatible |
+| `/v1/rerank` | Sorted by relevance, includes documents | Cohere/Jina compatible, retrieval |
+
+**For LLM Rerankers (Qwen3):** Client must format query/documents with prefix/suffix before sending. See `tests/fixtures/test_rerankers.yaml` for formatting templates.
 
 ### Moderate
 

@@ -1,5 +1,9 @@
 # Reranker Unification Plan - March 21, 2026
 
+## Status: ✅ COMPLETE
+
+All implementation complete. See "Implementation Complete" section for details.
+
 ## Executive Summary
 
 Move ALL abstraction to cmw-rag. The client adapter owns formatting (including prefix/suffix),
