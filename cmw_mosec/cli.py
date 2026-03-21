@@ -502,7 +502,16 @@ def check_rerank(model: str | None, endpoint: str) -> None:
                 response.raise_for_status()
                 result = response.json()
 
-                scores = result["scores"]
+                # Handle different response formats
+                if ep == "/v1/score":
+                    # vLLM format: {data: [{index, object, score}, ...]}
+                    scores = [item["score"] for item in result["data"]]
+                else:
+                    # Cohere format: {results: [{index, document, relevance_score}, ...]}
+                    scores = [0.0] * len(documents)
+                    for r in result["results"]:
+                        scores[r["index"]] = r["relevance_score"]
+
                 ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
 
                 click.echo(f"\n{ep} scores: {[f'{s:.4f}' for s in scores]}")
