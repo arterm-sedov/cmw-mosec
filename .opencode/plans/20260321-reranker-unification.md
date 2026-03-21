@@ -538,3 +538,163 @@ Both `/v1/score` and `/v1/rerank` use the same underlying `_compute_scores()` me
 2. Use `/v1/score` endpoint for reranking
 3. Add `query_template`, `doc_template`, `prefix`, `suffix` to model configs
 4. Handle both cross_encoder and llm_reranker model types
+
+## CMW-RAG Refactoring Steps
+
+### Overview
+
+To achieve compatibility with vLLM endpoints and cmw-mosec, cmw-rag needs the following changes:
+
+### 1. Update Reranker Client Contract
+
+**Before (current cmw-rag):**
+```python
+# Uses InfinityReranker with custom response format
+response = client.post("/v1/rerank", json={"query": q, "documents": docs})
+scores = response["scores"]  # Simple array
+```
+
+**After (new contract):**
+```python
+# Use /v1/score for raw scores (vLLM format)
+response = client.post("/v1/score", json={"query": q, "documents": docs})
+data = response["data"]  # [{index, object, score}, ...]
+scores = [item["score"] for item in data]
+
+# Or use /v1/rerank for sorted results (Cohere format)
+response = client.post("/v1/rerank", json={"query": q, "documents": docs})
+results = response["results"]  # [{index, document, relevance_score}, ...]
+# Results are sorted by relevance (descending)
+```
+
+### 2. Add Model-Type-Aware Formatting
+
+Create a `RerankerAdapter` that handles formatting based on model type:
+
+```python
+class RerankerAdapter:
+    def __init__(self, model_config: dict):
+        self.model_type = model_config.get("reranker_type", "cross_encoder")
+        self.formatting = model_config.get("formatting", {})
+    
+    def format_query(self, query: str, instruction: str | None = None) -> str:
+        if self.model_type == "cross_encoder":
+            return query  # No formatting needed
+        
+        # LLM reranker: apply template
+        template = self.formatting.get("query_template", "{query}")
+        prefix = self.formatting.get("prefix", "")
+        return template.format(prefix=prefix, instruction=instruction, query=query)
+    
+    def format_document(self, doc: str) -> str:
+        if self.model_type == "cross_encoder":
+            return doc  # No formatting needed
+        
+        # LLM reranker: apply template
+        template = self.formatting.get("doc_template", "{doc}")
+        suffix = self.formatting.get("suffix", "")
+        return template.format(doc=doc, suffix=suffix)
+```
+
+### 3. Update Model Config Schema
+
+Add formatting fields to model config:
+
+```yaml
+# cmw-rag config/models.yaml
+rerankers:
+  DiTy/cross-encoder-russian-msmarco:
+    type: cross_encoder
+    # No formatting needed
+    
+  Qwen/Qwen3-Reranker-0.6B:
+    type: llm_reranker
+    formatting:
+      query_template: "{prefix}<Instruct>: {instruction}\n<Query>: {query}\n"
+      doc_template: "<Document>: {doc}{suffix}"
+      prefix: "<|im_start|>system\nJudge whether...\n<|im_end|>\n<|im_start|>user\n"
+      suffix: "<|im_end|>\n<|im_start|>assistant\n\n\n\n\n"
+      default_instruction: "Given a web search query, retrieve relevant passages"
+```
+
+### 4. Rename/Deprecate Old InfinityReranker
+
+```python
+# Old (deprecated but still works):
+class InfinityReranker:
+    def rerank(self, query: str, documents: list[str]) -> list[float]:
+        # Returns raw scores for backward compatibility
+        
+# New:
+class RerankerAdapter:
+    def score(self, query: str, documents: list[str], 
+              instruction: str | None = None) -> list[float]:
+        """Returns raw scores via /v1/score endpoint."""
+        
+    def rerank(self, query: str, documents: list[str], 
+               instruction: str | None = None,
+               top_n: int | None = None) -> list[dict]:
+        """Returns sorted results via /v1/rerank endpoint."""
+```
+
+### 5. Provider Abstraction
+
+Create unified interface for multiple providers:
+
+```python
+class RerankerProvider(Protocol):
+    def score(self, query: str, documents: list[str]) -> list[float]:
+        """Returns raw scores in original order."""
+        ...
+    
+    def rerank(self, query: str, documents: list[str], 
+               top_n: int | None = None) -> list[dict]:
+        """Returns sorted results with document text."""
+        ...
+
+class MosecRerankerProvider(RerankerProvider):
+    """cmw-mosec provider (vLLM/Cohere compatible)."""
+    
+class VLLMRerankerProvider(RerankerProvider):
+    """vLLM provider (same contract as cmw-mosec)."""
+```
+
+### 6. Instruction Handling
+
+Move instruction from server to client:
+
+**Before (server-side instruction):**
+```python
+# cmw-mosec received raw query and applied instruction server-side
+response = client.post("/v1/rerank", json={
+    "query": "What is France?",
+    "documents": docs,
+    "instruction": "search"  # Server applied this
+})
+```
+
+**After (client-side instruction):**
+```python
+# Client formats query with instruction before sending
+formatted_query = adapter.format_query(query, instruction)
+response = client.post("/v1/score", json={
+    "query": formatted_query,
+    "documents": [adapter.format_document(doc) for doc in docs]
+})
+```
+
+### Files to Update in cmw-rag
+
+1. `rag_engine/config/models.yaml` - Add formatting templates
+2. `rag_engine/config/schemas.py` - Add `RerankerFormatting` model
+3. `rag_engine/retrieval/reranker.py` - Create `RerankerAdapter` class
+4. `rag_engine/retrieval/infinity_reranker.py` - Deprecate or refactor
+5. Tests for new adapter
+
+### Migration Path
+
+1. **Phase 1**: Add `RerankerAdapter` alongside existing `InfinityReranker`
+2. **Phase 2**: Update config to use new adapter
+3. **Phase 3**: Verify DiTy/BGE-m3 still work (cross_encoder, no formatting)
+4. **Phase 4**: Test Qwen3 formatting (llm_reranker, client-side formatting)
+5. **Phase 5**: Deprecate old InfinityReranker
