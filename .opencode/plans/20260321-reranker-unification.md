@@ -117,17 +117,18 @@ Server handles [query, doc] pairing internally (existing behavior, works, don't 
 
 ### LLM Rerankers (Qwen3, BGE-Gemma) - NEW
 ```json
-{
-  "pairs": [
-    "<|im_start|>system\n...<|im_end|>\n<|im_start|>user\n<Instruct>: ...\n<Query>: ...\n<Document>: ...<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
-    "..."
-  ],
-  "max_length": 8192
-}
-→ {"scores": [0.95, 0.12]}
+{"pair": "<|im_start|>system\n...<Instruct>: ...\n<Query>: ...\n<Document>: ...<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n", "max_length": 8192}
+→ {"score": 0.95}
 ```
-Client sends FULLY formatted strings including prefix/suffix.
-Server tokenizes, runs inference, returns raw scores.
+**One pair per request.** Client sends a single fully formatted string.
+Server tokenizes, runs inference, returns one score.
+
+Client iterates over documents, sends N requests, collects scores.
+Mosec dynamic batching handles efficiency transparently (multiple concurrent
+requests get batched into a single GPU forward pass).
+
+This matches vLLM's `llm.score(query, document)` pattern where each
+query-document is an independent scoring unit.
 
 ## Configuration
 
@@ -232,11 +233,13 @@ test_cases:
 ### Phase 1: cmw-mosec Server Simplification
 
 **`cmw_mosec/server_manager.py`:**
-1. Add `pairs` field support for `llm_reranker` type
-2. When `pairs` is provided: tokenize each pair directly, run inference, return scores
-3. Remove: prefix/suffix construction, instruction handling, user content formatting
+1. Add `pair` field support for `llm_reranker` type (single string, one query-doc pair)
+2. When `pair` is provided: tokenize, run inference, return single score
+3. Remove: prefix/suffix construction, instruction handling, user content formatting,
+   document iteration loop
 4. Keep: tokenization, max_length truncation, scoring logic (from config)
-5. Cross-encoder path: UNCHANGED (accepts `{query, docs}`)
+5. Cross-encoder path: UNCHANGED (accepts `{query, docs}`, iterates server-side)
+6. Mosec dynamic batching handles concurrent single-pair requests efficiently
 
 **`config/models.yaml`:**
 - Remove `default_instruction` from Qwen3 configs (client-side concern)
@@ -264,27 +267,31 @@ class InfinityReranker(HTTPClientMixin):
                      for doc, _ in candidates]
 
         if self.config.user_template:
-            # LLM reranker: format fully client-side
+            # LLM reranker: format and score each pair individually
             task = instruction or self.config.default_instruction or ""
             prefix = self.config.prefix or ""
             suffix = self.config.suffix or ""
             prompt_suffix = self.config.prompt_suffix or ""
 
-            pairs = []
+            scores = []
             for doc in documents:
                 content = self.config.user_template.format(
                     instruction=task, query=query, doc=doc
                 )
-                pairs.append(f"{prefix}{content}{prompt_suffix}{suffix}")
-
-            response = self._post({"pairs": pairs})
+                pair = f"{prefix}{content}{prompt_suffix}{suffix}"
+                response = self._post({"pair": pair})
+                scores.append(response["score"])
         else:
-            # Cross-encoder: pass through unchanged
+            # Cross-encoder: pass through unchanged (server iterates)
             response = self._post({"query": query, "documents": documents, "top_k": top_k})
+            scores = response["scores"]
 
-        scores = response["scores"]
         # ... existing metadata boost and sort logic
 ```
+
+Note: For performance, the client loop can be parallelized with `concurrent.futures`
+or `asyncio`. Mosec batches concurrent requests into single GPU forward passes
+automatically.
 
 ### Phase 3: Testing
 
