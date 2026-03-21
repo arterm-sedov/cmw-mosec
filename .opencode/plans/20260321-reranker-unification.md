@@ -541,9 +541,11 @@ Both `/v1/score` and `/v1/rerank` use the same underlying `_compute_scores()` me
 
 ## CMW-RAG Refactoring Steps
 
+**NO BACKWARD COMPATIBILITY** - Direct refactor to new contracts.
+
 ### Overview
 
-To achieve compatibility with vLLM endpoints and cmw-mosec, cmw-rag needs the following changes:
+Simply update cmw-rag to use the new vLLM/Cohere contracts. No migration phases needed.
 
 ### 1. Update Reranker Client Contract
 
@@ -688,13 +690,7 @@ response = client.post("/v1/score", json={
 1. `rag_engine/config/models.yaml` - Add formatting templates
 2. `rag_engine/config/schemas.py` - Add `RerankerFormatting` model
 3. `rag_engine/retrieval/reranker.py` - Create `RerankerAdapter` class
-4. `rag_engine/retrieval/infinity_reranker.py` - Deprecate or refactor
+4. `rag_engine/retrieval/infinity_reranker.py` - Replace with new adapter
 5. Tests for new adapter
 
-### Migration Path
-
-1. **Phase 1**: Add `RerankerAdapter` alongside existing `InfinityReranker`
-2. **Phase 2**: Update config to use new adapter
-3. **Phase 3**: Verify DiTy/BGE-m3 still work (cross_encoder, no formatting)
-4. **Phase 4**: Test Qwen3 formatting (llm_reranker, client-side formatting)
-5. **Phase 5**: Deprecate old InfinityReranker
+**That's it.** Direct refactor, no phases needed.
