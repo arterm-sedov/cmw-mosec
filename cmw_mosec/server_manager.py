@@ -96,40 +96,47 @@ def _generate_server_script(
     reranker_code = ""
     guard_code = ""
 
-    guard_max_new_tokens = 128
-    guard_max_length = 32768
+    guard_max_new_tokens = None
+    guard_max_length = None
     if guard_model:
         try:
             guard_config = ModelRegistry().get_guard_config(guard_model)
-            guard_max_new_tokens = guard_config.max_new_tokens or 128
-            guard_max_length = guard_config.max_length or 32768
+            guard_max_new_tokens = guard_config.max_new_tokens
+            guard_max_length = guard_config.max_length
         except ValueError:
-            guard_max_new_tokens = 128
-            guard_max_length = 32768
+            pass
+        if guard_max_new_tokens is None:
+            raise ValueError(f"max_new_tokens not configured for guard model {guard_model}")
+        if guard_max_length is None:
+            raise ValueError(f"max_length not configured for guard model {guard_model}")
 
     # Get pooling config for embedding model
-    pooling_method = "mean"  # default
-    embed_dtype = "float16"  # default
-    model_class = "AutoModel"  # default
-    embed_dimensions = None  # default: use model's native dimension
-    embed_max_length = 512  # default context length
+    pooling_method = None
+    embed_dtype = None
+    model_class = None
+    embed_dimensions = None
+    embed_max_length = None
     if embedding_model:
         try:
             from .server_config import ModelRegistry
 
             registry = ModelRegistry()
             config_dict = registry._embeddings.get(embedding_model.lower(), {})
-            pooling_method = config_dict.get("pooling", "mean")
-            embed_dtype = config_dict.get("dtype", "float16")
-            model_class = config_dict.get("model_class", "AutoModel")
-            embed_dimensions = config_dict.get("dimensions")  # Native dimension
-            embed_max_length = config_dict.get("max_length", 512)
+            pooling_method = config_dict.get("pooling")
+            embed_dtype = config_dict.get("dtype")
+            model_class = config_dict.get("model_class")
+            embed_dimensions = config_dict.get("dimensions")
+            embed_max_length = config_dict.get("max_length")
         except Exception:
-            pooling_method = "mean"
-            embed_dtype = "float16"
-            model_class = "AutoModel"
-            embed_dimensions = None
-            embed_max_length = 512
+            pass
+        if pooling_method is None:
+            raise ValueError(f"pooling not configured for embedding model {embedding_model}")
+        if embed_dtype is None:
+            raise ValueError(f"dtype not configured for embedding model {embedding_model}")
+        if embed_max_length is None:
+            raise ValueError(f"max_length not configured for embedding model {embedding_model}")
+        if model_class is None:
+            model_class = "AutoModel"  # sensible default
 
     # Embedding worker
     if embedding_model:
@@ -214,13 +221,14 @@ class EmbeddingWorker(Worker):
         last_token_embeddings = model_output[0][torch.arange(batch_size, device=model_output[0].device), sequence_lengths]
         return last_token_embeddings
 
-    def get_embeddings(self, texts: Union[str, List[Union[str, List[int]]]]):
+    def get_embeddings(self, texts: Union[str, List[Union[str, List[int]]]], max_length: int = None):
         # Handle both single string and list of strings
         if isinstance(texts, str):
             texts = [texts]
 
+        effective_max_length = max_length or MAX_LENGTH
         encoded_input = self.tokenizer(
-            texts, padding=True, truncation=True, max_length=MAX_LENGTH, return_tensors="pt"
+            texts, padding=True, truncation=True, max_length=effective_max_length, return_tensors="pt"
         )
         inputs = encoded_input.to(self.device)
         with torch.no_grad():
@@ -245,14 +253,16 @@ class EmbeddingWorker(Worker):
         return token_count, sentence_embeddings
 
     def deserialize(self, data: bytes) -> EmbeddingRequest:
-        # Extract dimensions from raw JSON before llmspec loses it
-        # llmspec's EmbeddingRequest doesn't have a dimensions field
+        # Extract client-controllable params from raw JSON before llmspec loses them
+        # llmspec's EmbeddingRequest doesn't have dimensions or max_length fields
         import json
         raw = json.loads(data)
         dimensions = raw.get('dimensions')  # OpenAI API parameter for MRL
+        max_length = raw.get('max_length')  # Optional: override config max_length
         req = EmbeddingRequest.from_bytes(data)
-        # Store dimensions as dynamic attribute for MRL support
+        # Store as dynamic attributes
         req.dimensions = dimensions
+        req.max_length = max_length
         return req
 
     def serialize(self, data: EmbeddingResponse) -> bytes:
@@ -266,7 +276,7 @@ class EmbeddingWorker(Worker):
                 f"this worker {{self.model_name}}"
             )
 
-        token_count, embeddings = self.get_embeddings(data.input)
+        token_count, embeddings = self.get_embeddings(data.input, max_length=getattr(data, 'max_length', None))
         embeddings = embeddings.detach()
         if self.device != "cpu":
             embeddings = embeddings.cpu()
@@ -606,12 +616,13 @@ class GuardWorker(Worker):
     def forward(self, data: dict) -> dict:
         content = data.get("content") or data.get("input", "")
         prompt = self._format_prompt(content, data.get("context"), data.get("moderation_type", "prompt"))
+        effective_max_length = data.get("max_length") or MAX_LENGTH
 
         model_inputs = self.tokenizer(
             [prompt],
             return_tensors="pt",
             truncation=True,
-            max_length=MAX_LENGTH
+            max_length=effective_max_length
         )
 
         if torch.cuda.is_available():
