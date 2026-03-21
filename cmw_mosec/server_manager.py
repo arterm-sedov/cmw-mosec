@@ -388,36 +388,22 @@ class RerankerWorker(Worker):
         return json.dumps(data).encode("utf-8")
 
     def forward(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Forward pass for reranker endpoint.
+        
+        Default response: simple scores array - lightweight, backward compatible
+        With return_documents=true: results sorted by relevance with text - Cohere/Jina format
+        """
         query = data["query"]
         docs = data.get("docs") or data.get("documents")
         effective_max_length = data.get("max_length") or self.max_length
-        response_format = data.get("response_format", "scores")
         return_documents = data.get("return_documents", False)
         top_n = data.get("top_n")
-
-        # Accept both "queries" (vLLM /v1/score) and "query" (our /v1/score and /v1/rerank)
-        # For vLLM compat: queries can be a single string or list
-        if "queries" in data and query is None:
-            queries_data = data["queries"]
-            if isinstance(queries_data, list):
-                query = queries_data[0] if queries_data else ""
-            else:
-                query = queries_data
-
+        
         # Compute raw scores
         scores = self._compute_scores(query, docs, effective_max_length)
-
-        # Return in requested format
-        if response_format == "vllm_score":
-            # vLLM score format: list of {{index, object, score}}
-            return {{
-                "data": [
-                    {{"index": i, "object": "score", "score": s}}
-                    for i, s in enumerate(scores)
-                ]
-            }}
-        elif return_documents:
-            # Cohere/Jina rerank format: sorted results with document text
+        
+        if return_documents:
+            # Cohere/Jina format: sorted results with document text
             indexed_scores = list(enumerate(zip(docs, scores)))
             indexed_scores.sort(key=lambda x: x[1][1], reverse=True)
             
@@ -434,17 +420,37 @@ class RerankerWorker(Worker):
             ]
             return {{"results": results}}
         else:
-            # Default: simple scores array
+            # Simple scores format (default)
             return {{"scores": scores}}
 
 
 class ScoreWorker(RerankerWorker):
-    """Worker for /v1/score endpoint - returns vLLM format."""
+    """Worker for /v1/score endpoint.
+    
+    Returns vLLM format: data array with index and score.
+    Lightweight - no documents returned, just index and score.
+    """
     
     def forward(self, data: dict[str, Any]) -> dict[str, Any]:
-        # Force vLLM score format
-        data["response_format"] = "vllm_score"
-        return super().forward(data)'''
+        query = data["query"]
+        docs = data.get("docs") or data.get("documents")
+        effective_max_length = data.get("max_length") or self.max_length
+        
+        # Accept "queries" parameter for vLLM compatibility
+        if "queries" in data and query is None:
+            queries_data = data["queries"]
+            query = queries_data[0] if isinstance(queries_data, list) and queries_data else queries_data
+        
+        # Compute raw scores
+        scores = self._compute_scores(query, docs, effective_max_length)
+        
+        # vLLM format: lightweight, no documents
+        return {{
+            "data": [
+                {{"index": i, "object": "score", "score": s}}
+                for i, s in enumerate(scores)
+            ]
+        }}'''
 
     # Guard worker
     if guard_model:

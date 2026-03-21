@@ -71,7 +71,6 @@ def test_score_endpoint(port: int, query: str, documents: list[str]) -> dict:
     payload = {
         "query": query,
         "documents": documents,
-        "response_format": "vllm_score",
     }
 
     response = requests.post(url, json=payload, timeout=60.0)
