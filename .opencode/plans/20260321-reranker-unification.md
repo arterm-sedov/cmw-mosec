@@ -208,10 +208,17 @@ Sends one request with all docs        Returns scores array
 ### What Server Does
 
 1. Load model (from config: model_id, dtype, device)
-2. Receive `{query, documents, max_length}`
-3. Pair query with each document
-4. Tokenize, truncate, run inference
-5. Return `{scores: [...]}`
+2. Receive `{query, documents, max_length}` where:
+   - `query`: single pre-formatted string (client applied prefix)
+   - `documents`: list of pre-formatted strings (client applied suffix)
+3. For EACH document:
+   - Pair: `formatted_pair = query + document`
+   - Tokenize, truncate, run inference
+4. Return `{scores: [...]}` (one score per document, original order)
+
+**Server pairing behavior:**
+- Cross-encoder: `model.predict([[query, doc] for doc in documents])`
+- LLM reranker: `model(formatted_pairs)` where formatted_pairs = query + each doc
 
 Server does NOT know about prefix/suffix/instructions. It receives pre-formatted strings.
 
@@ -315,47 +322,130 @@ test_cases:
 
 ## Implementation Plan
 
-### Stage 1: Align with vLLM `/v1/score` Contract
+### Non-Breaking Strategy
+
+**Key principle:** Existing `/v1/rerank` endpoint MUST continue working as-is for existing clients (DiTy, BGE-m3).
+
+- `/v1/rerank`: Keep current response format `{scores: [...]}` - NO CHANGES to response schema
+- `/v1/score`: NEW endpoint with same behavior as `/v1/rerank` (alias) - vLLM-compatible naming
+- `/v1/rerank` Stage 2 enhancement: Optional `return_documents` param to enable vLLM/Cohere format
+
+### Stage 1: Unified `/v1/score` Endpoint
 
 **cmw-mosec changes:**
-1. Keep `/v1/rerank` endpoint for backward compatibility
-2. Add `/v1/score` endpoint alias to `/v1/rerank`
-3. For `llm_reranker`: accept pre-formatted `{query, documents}` (client applies prefix/suffix)
-4. Remove: prefix/suffix construction, instruction handling from worker code
-5. Keep: tokenization, max_length truncation, scoring logic (from config)
-6. Response: `{scores: [...]}` (unchanged)
+1. Add `/v1/score` endpoint (alias to `/v1/rerank` worker)
+2. Both endpoints accept `{query, documents, max_length}`
+3. Both return `{scores: [...]}`
+4. For `llm_reranker`: accept pre-formatted `{query, documents}`
+5. Remove: prefix/suffix construction, instruction handling from worker code
+6. Keep: tokenization, max_length truncation, scoring logic (from config)
 
 **cmw-rag changes:**
 1. Update `InfinityReranker` to use `/v1/score` endpoint
 2. Format query and documents client-side (apply prefix, suffix, instruction)
 3. Send pre-formatted strings, receive scores
 
-**cmw-mosec config changes:**
-- Remove `default_instruction` from Qwen3 configs (client-side concern)
+**Config changes:**
+- cmw-mosec `config/models.yaml`: Remove `default_instruction` (client-side)
+- cmw-rag `models.yaml`: Add `query_template`, `doc_template`, `prefix`, `suffix`, `default_instruction`
 
-### Stage 2: Add vLLM `/v1/rerank` Compatible Endpoint
+### Stage 2: Optional vLLM/Cohere Format (Non-Breaking)
 
 **cmw-mosec changes:**
-1. Update `/v1/rerank` to return sorted results in vLLM/Cohere/Jina format
-2. Add `top_n` parameter
-3. Response format: `{id, model, usage, results: [{index, document, relevance_score}]}`
+1. Add optional `return_documents` param to `/v1/rerank`
+2. If `return_documents=true`: return vLLM/Cohere format `{results: [{index, document, relevance_score}]}`
+3. If `return_documents=false` or omitted: return current format `{scores: [...]}` (backward compatible)
 
-**cmw-rag changes:**
-1. Add `RerankClient` class that calls `/v1/rerank` and returns sorted results
-2. Optional; `/v1/score` remains primary for use cases needing raw scores
+**Backward compatibility preserved:**
+- Existing clients (DiTy, BGE-m3) continue using `/v1/rerank` with `{scores: [...]}` response
+- New clients can opt into vLLM/Cohere format with `return_documents=true`
 
-### Phase: Testing
+### Test-Driven Development
 
-- [ ] DiTy regression: `/v1/score` returns same scores as before
-- [ ] Qwen3: client formats query+docs, server returns scores
-- [ ] Compare `/v1/score` scores with model card examples
-- [ ] `/v1/rerank` returns sorted results with correct indices
+**Test files:**
+```
+tests/
+├── test_rerankers.py          # Unit tests for reranker worker
+├── test_server_manager.py     # Integration tests for endpoint
+└── fixtures/
+    └── test_rerankers.yaml    # Test harness config (client-side formatting)
+```
+
+**Test cases (TDD):**
+1. **DiTy regression** (must pass before any changes):
+   - `POST /v1/rerank {"query": "...", "documents": [...]}` → `{scores: [...]}`
+   - `POST /v1/score {"query": "...", "documents": [...]}` → `{scores: [...]}`
+
+2. **Qwen3 pre-formatted** (new behavior):
+   - `POST /v1/score {"query": "<prefix>...", "documents": ["<doc><suffix>", ...]}` → `{scores: [...]}`
+   - Verify scores match model card examples
+
+3. **Config separation**:
+   - Server config does NOT contain prefix/suffix/instruction
+   - Client config DOES contain prefix/suffix/instruction
+   - Test harness config has test values
+
+4. **Non-breaking verification**:
+   - FRIDA embedder: `/v1/embeddings` unchanged
+   - Qwen3Guard: `/v1/moderate` unchanged
+   - DiTy reranker: `/v1/rerank` response unchanged
+
+### Testing Checklist
+
+- [ ] DiTy: `/v1/rerank` and `/v1/score` return same scores as before
+- [ ] Qwen3: Client formats, server scores, matches model card
+- [ ] Test harness: Uses `tests/fixtures/test_rerankers.yaml` for dynamic parts
+- [ ] FRIDA: `/v1/embeddings` unchanged
+- [ ] Qwen3Guard: `/v1/moderate` unchanged
+- [ ] Backward compat: Old clients work without changes
 
 ## Errata in Current cmw-mosec Implementation
 
-1. **Suffix bug:** Missing `<think>\n\n</think>` tags per model card
-2. **max_length:** Should be `max_length - prefix_len - suffix_len` for tokenization
-   (with client-side prefix/suffix, server just needs raw `max_length`)
+1. **Suffix bug (Qwen3):** Current code missing `laissez\n\n\n\n\n\n` in suffix string. Fixed model card shows:
+   ```
+   suffix = "<|im_end|>\n<|im_start|>assistant\nlaissez\n\n\n\n\n\n"
+   ```
+
+2. **Instruction in server code (Qwen3):** Currently constructs `<Instruct>: {instruction}` server-side. Moves to client-side.
+
+3. **max_length calculation (Qwen3):** Currently uses `max_length` directly. Should be:
+   - Client: applies prefix/suffix before sending
+   - Server: tokenizes received string with `max_length` truncation
+   - No need to subtract prefix/suffix lengths (already in string)
+
+## Migration Path (Non-Breaking)
+
+**Before (current Qwen3 in cmw-mosec):**
+```python
+# Server receives:
+{"query": "What is France?", "documents": ["Paris is...", "Lyon is..."], "instruction": "search"}
+
+# Server constructs:
+pairs = [f"<Instruct>: search\n<Query>: What is France?\n<Document>: Paris is..." for doc in docs]
+# Then applies prefix/suffix, tokenizes, scores
+```
+
+**After (new unified approach):**
+```python
+# Client constructs:
+query = f"{prefix}<Instruct>: search\n<Query>: What is France?\n"
+documents = [f"<Document>: {doc}{suffix}" for doc in docs]
+
+# Client sends:
+{"query": query, "documents": documents}
+
+# Server receives pre-formatted strings, pairs them, tokenizes, scores:
+pairs = [query + doc for doc in documents]  # Server just concatenates
+```
+
+**DiTy/BGE-m3 (unchanged):**
+```python
+# Client sends:
+{"query": "What is France?", "documents": ["Paris is...", "Lyon is..."]}
+
+# Server (no change):
+scores = model.predict([[query, doc] for doc in documents])
+```
 
 ## Design Principles
 
