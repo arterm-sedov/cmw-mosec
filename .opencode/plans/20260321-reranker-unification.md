@@ -7,6 +7,21 @@ instruction handling, and score extraction. Servers (cmw-mosec, vLLM) are agnost
 accept pre-formatted query + documents batch, return scores. Unified API contract across all
 providers. Test harness acts as a client with its own dynamic config.
 
+### Key Insight: cmw-mosec Already Matches vLLM Score API
+
+Current cmw-mosec `/v1/rerank` accepts `{query, documents}` and returns `{scores: [...]}`.
+This is essentially vLLM's `/score` behavior (raw scores, original order).
+The only server-side change needed: stop constructing prefix/suffix/instruction for Qwen3
+and just tokenize the pre-formatted strings received from the client.
+
+**Comparison:**
+| Aspect | cmw-mosec `/v1/rerank` | vLLM `/score` | vLLM `/rerank` |
+|--------|----------------------|---------------|----------------|
+| Request | `{query, docs}` | `{queries, documents}` | `{query, documents}` |
+| Response | `{scores: [...]}` | `{data: [{score},...]}` | `{results: [{relevance_score, index},...]}` |
+| Sorting | No | No | Yes (by relevance) |
+| Behavior | Raw scores | Raw scores | Sorted results |
+
 ## Working Models (DO NOT BREAK)
 
 - **FRIDA** embedder via cmw-mosec `/v1/embeddings` ✅
@@ -78,25 +93,83 @@ Sources:
 | BGE-Gemma | `llm_reranker` | `logits[:,-1, Yes]` | `prompt` (static default) |
 | Qwen3 | `llm_reranker` | `softmax(yes, no)` | `instruction` (dynamic) |
 
-## Unified API Contract
+## Two-Stage Endpoint Alignment
 
-### For ALL Rerankers (cross-encoder AND llm_reranker)
+### Stage 1: `/v1/score` Endpoint (Primary for Rerankers)
+
+Current cmw-mosec `/v1/rerank` behavior closely matches vLLM's `/v1/score`:
+- Returns raw scores (not sorted)
+- Original document order preserved
+- Simple response format
+
+**Action:**
+1. cmw-mosec: Add `/v1/score` endpoint alias (or deprecate `/v1/rerank` in favor of `/v1/score`)
+2. cmw-mosec: For llm_rerankers, accept pre-formatted `{query, documents}` (client applies prefix/suffix)
+3. cmw-rag: Use `/v1/score` endpoint for rerankers (matches vLLM contract)
+
+### Stage 2: `/v1/rerank` Endpoint (Compatibility Layer)
+
+vLLM's `/v1/rerank` returns sorted results in Cohere/Jina format:
+- Results sorted by relevance score (descending)
+- Each result has `{index, document: {text}, relevance_score}`
+
+**Action:**
+1. cmw-mosec: Update `/v1/rerank` to return vLLM/Cohere/Jina compatible response
+2. Optional: Add `top_n` parameter to limit results
+
+### Unified Core Contract (for `/v1/score`)
 
 ```json
 // Request: Client sends pre-formatted query and documents
 {
   "query": "<formatted query string>",
   "documents": ["<formatted doc1>", "<formatted doc2>", "..."],
-  "max_length": 8192
+  "max_length": 8192  // optional override
 }
 
-// Response: Server returns scores in same order
+// Response: Raw scores in same order as input
 {
   "scores": [0.95, 0.12, 0.03]
 }
 ```
 
-**One request, N documents, N scores. Same contract for mosec, vLLM, any server.**
+**One request, N documents, N scores, original order.**
+Matches vLLM `/v1/score` exactly (same request/response shape).
+
+### vLLM `/v1/rerank` Contract (for Stage 2)
+
+```json
+// Request (same as /v1/score)
+{
+  "query": "What is the capital of France?",
+  "documents": ["The capital of Brazil is Brasilia.", "The capital of France is Paris."],
+  "top_n": 2  // optional, defaults to len(documents)
+}
+
+// Response: Results sorted by relevance (descending)
+{
+  "id": "rerank-<uuid>",
+  "model": "BAAI/bge-reranker-base",
+  "usage": {"total_tokens": 56},
+  "results": [
+    {
+      "index": 1,  // original position
+      "document": {"text": "The capital of France is Paris."},
+      "relevance_score": 0.9985
+    },
+    {
+      "index": 0,
+      "document": {"text": "The capital of Brazil is Brasilia."},
+      "relevance_score": 0.0005
+    }
+  ]
+}
+```
+
+**Key differences from `/v1/score`:**
+- Results sorted by `relevance_score` (descending)
+- Each result includes original `index` and `document.text`
+- Optional `top_n` parameter to limit results
 
 ### What "formatted" Means Per Model
 
@@ -242,79 +315,41 @@ test_cases:
 
 ## Implementation Plan
 
-### Phase 1: cmw-mosec Server Simplification
+### Stage 1: Align with vLLM `/v1/score` Contract
 
-**`cmw_mosec/server_manager.py`:**
-1. For `llm_reranker` type: accept `{query, documents}` where query and documents are
-   pre-formatted strings (client already applied prefix/suffix/instruction)
-2. Remove: prefix/suffix construction, instruction handling, user content formatting
-3. Keep: tokenization, max_length truncation, scoring logic (from config)
-4. Server pairs query with each document, tokenizes each pair, runs inference
-5. Cross-encoder path: UNCHANGED (same `{query, docs}` contract)
+**cmw-mosec changes:**
+1. Keep `/v1/rerank` endpoint for backward compatibility
+2. Add `/v1/score` endpoint alias to `/v1/rerank`
+3. For `llm_reranker`: accept pre-formatted `{query, documents}` (client applies prefix/suffix)
+4. Remove: prefix/suffix construction, instruction handling from worker code
+5. Keep: tokenization, max_length truncation, scoring logic (from config)
+6. Response: `{scores: [...]}` (unchanged)
 
-**`config/models.yaml`:**
+**cmw-rag changes:**
+1. Update `InfinityReranker` to use `/v1/score` endpoint
+2. Format query and documents client-side (apply prefix, suffix, instruction)
+3. Send pre-formatted strings, receive scores
+
+**cmw-mosec config changes:**
 - Remove `default_instruction` from Qwen3 configs (client-side concern)
-- Add `scoring_tokens` and `scoring_method` (server needs these for inference)
 
-**`tests/test_rerankers.yaml`:**
-- Create separate test config with formatting templates and test data
-- Test harness formats like a client
+### Stage 2: Add vLLM `/v1/rerank` Compatible Endpoint
 
-### Phase 2: cmw-rag Client Enhancement
+**cmw-mosec changes:**
+1. Update `/v1/rerank` to return sorted results in vLLM/Cohere/Jina format
+2. Add `top_n` parameter
+3. Response format: `{id, model, usage, results: [{index, document, relevance_score}]}`
 
-**`rag_engine/config/models.yaml`:**
-- Add `query_template`, `doc_template`, `prefix`, `suffix`, `default_instruction`
-  to Qwen3 and BGE-Gemma configs
+**cmw-rag changes:**
+1. Add `RerankClient` class that calls `/v1/rerank` and returns sorted results
+2. Optional; `/v1/score` remains primary for use cases needing raw scores
 
-**`rag_engine/config/schemas.py`:**
-- Add fields to `ServerRerankerConfig`: `query_template`, `doc_template`,
-  `prefix`, `suffix`, `prompt`, `default_instruction`
+### Phase: Testing
 
-**`rag_engine/retrieval/reranker.py`:**
-```python
-class InfinityReranker(HTTPClientMixin):
-    def rerank(self, query, candidates, top_k, instruction=None, **kwargs):
-        documents = [
-            doc.page_content if hasattr(doc, "page_content") else str(doc)
-            for doc, _ in candidates
-        ]
-
-        if self.config.query_template:
-            # LLM reranker: format query and documents client-side
-            task = instruction or self.config.default_instruction or ""
-            prefix = self.config.prefix or ""
-            suffix = self.config.suffix or ""
-            prompt = self.config.prompt or ""
-
-            formatted_query = self.config.query_template.format(
-                prefix=prefix, instruction=task, query=query
-            )
-            formatted_docs = [
-                self.config.doc_template.format(doc=doc, suffix=suffix, prompt=prompt)
-                for doc in documents
-            ]
-            response = self._post({
-                "query": formatted_query,
-                "documents": formatted_docs,
-            })
-        else:
-            # Cross-encoder: pass through unchanged
-            response = self._post({
-                "query": query,
-                "documents": documents,
-                "top_k": top_k,
-            })
-
-        scores = response["scores"]
-        # ... existing metadata boost and sort logic
-```
-
-### Phase 3: Testing
-
-- [ ] DiTy regression: `{query, documents}` path unchanged
-- [ ] Qwen3: client formats query+docs, server scores, results match model card
-- [ ] Test harness: formats from test yaml, validates scores
-- [ ] Compare scores with current implementation
+- [ ] DiTy regression: `/v1/score` returns same scores as before
+- [ ] Qwen3: client formats query+docs, server returns scores
+- [ ] Compare `/v1/score` scores with model card examples
+- [ ] `/v1/rerank` returns sorted results with correct indices
 
 ## Errata in Current cmw-mosec Implementation
 
