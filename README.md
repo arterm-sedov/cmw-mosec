@@ -334,6 +334,24 @@ curl -X POST http://localhost:8001/v1/embeddings \
 - Valid range: `[32, native_dimension]`
 - Native dimensions: 0.6B=1024, 4B=2560, 8B=4096
 
+**Client-Controllable Parameters:**
+
+| Param | Endpoints | Description |
+|-------|-----------|-------------|
+| `dimensions` | `/v1/embeddings` | MRL dimension truncation (Qwen3 only) |
+| `max_length` | All | Override config `max_length` for tokenization |
+
+```bash
+# Override max_length per request (reduces VRAM for long docs)
+curl -X POST http://localhost:8001/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-Embedding-0.6B",
+    "input": "long document...",
+    "max_length": 2048
+  }'
+```
+
 ### Rerank
 
 **Two endpoints available:**
