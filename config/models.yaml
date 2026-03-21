@@ -29,14 +29,17 @@ embedding_models:
     description: "Russian-optimized embedding, 1536 dimensions"
 
   # Qwen3 Embedding Series (multilingual, 119+ languages)
+  # Supports OpenAI-compatible /v1/embeddings API with dimensions parameter for MRL
   Qwen/Qwen3-Embedding-0.6B:
     model_id: Qwen/Qwen3-Embedding-0.6B
     dtype: float16
     batch_size: 16
     memory_gb: 2.0
     workers: 1
+    dimensions: 1024
+    max_length: 32768
     pooling: last_token  # Required for Qwen3 causal LM architecture
-    description: "0.6B params, 1024 dim, 32K context, MRL support"
+    description: "0.6B params, 32K context, MRL: dimensions=[32-1024]"
 
   Qwen/Qwen3-Embedding-4B:
     model_id: Qwen/Qwen3-Embedding-4B
@@ -44,8 +47,10 @@ embedding_models:
     batch_size: 16
     memory_gb: 12.0
     workers: 1
+    dimensions: 2560
+    max_length: 32768
     pooling: last_token  # Required for Qwen3 causal LM architecture
-    description: "4B params, 2560 dim, 32K context, MRL support"
+    description: "4B params, 32K context, MRL: dimensions=[32-2560]"
 
   Qwen/Qwen3-Embedding-8B:
     model_id: Qwen/Qwen3-Embedding-8B
@@ -53,8 +58,10 @@ embedding_models:
     batch_size: 8
     memory_gb: 22.0
     workers: 1
+    dimensions: 4096
+    max_length: 32768
     pooling: last_token  # Required for Qwen3 causal LM architecture
-    description: "8B params, 4096 dim, 32K context, MRL support"
+    description: "8B params, 32K context, MRL: dimensions=[32-4096]"
 
 ################################################################################
 # RERANKER MODELS

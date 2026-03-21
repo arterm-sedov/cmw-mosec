@@ -108,6 +108,8 @@ def _generate_server_script(
     pooling_method = "mean"  # default
     embed_dtype = "float16"  # default
     model_class = "AutoModel"  # default
+    embed_dimensions = None  # default: use model's native dimension
+    embed_max_length = 512  # default context length
     if embedding_model:
         try:
             from .server_config import ModelRegistry
@@ -117,10 +119,14 @@ def _generate_server_script(
             pooling_method = config_dict.get("pooling", "mean")
             embed_dtype = config_dict.get("dtype", "float16")
             model_class = config_dict.get("model_class", "AutoModel")
+            embed_dimensions = config_dict.get("dimensions")  # Native dimension
+            embed_max_length = config_dict.get("max_length", 512)
         except Exception:
             pooling_method = "mean"
             embed_dtype = "float16"
             model_class = "AutoModel"
+            embed_dimensions = None
+            embed_max_length = 512
 
     # Embedding worker
     if embedding_model:
@@ -142,12 +148,16 @@ EMBEDDING_MODEL = "{embedding_model}"
 DTYPE = "{embed_dtype}"
 POOLING = "{pooling_method}"
 MODEL_CLASS = "{model_class}"
+DIMENSIONS = {embed_dimensions}  # Native dimension, None means use model's full dimension
+MAX_LENGTH = {embed_max_length}  # Max context length for tokenization
 
 
 class EmbeddingWorker(Worker):
     def __init__(self):
         self.model_name = EMBEDDING_MODEL
         self.pooling = POOLING
+        self.dimensions = DIMENSIONS
+        self.max_length = MAX_LENGTH
 
         # LLM-based embedders (Qwen3) need left padding for last_token pooling
         # Encoder-based (FRIDA) use default right padding
@@ -207,7 +217,7 @@ class EmbeddingWorker(Worker):
             texts = [texts]
 
         encoded_input = self.tokenizer(
-            texts, padding=True, truncation=True, return_tensors="pt"
+            texts, padding=True, truncation=True, max_length=MAX_LENGTH, return_tensors="pt"
         )
         inputs = encoded_input.to(self.device)
         with torch.no_grad():
@@ -232,8 +242,15 @@ class EmbeddingWorker(Worker):
         return token_count, sentence_embeddings
 
     def deserialize(self, data: bytes) -> EmbeddingRequest:
-        # llmspec expects JSON format
-        return EmbeddingRequest.from_bytes(data)
+        # Extract dimensions from raw JSON before llmspec loses it
+        # llmspec's EmbeddingRequest doesn't have a dimensions field
+        import json
+        raw = json.loads(data)
+        dimensions = raw.get('dimensions')  # OpenAI API parameter for MRL
+        req = EmbeddingRequest.from_bytes(data)
+        # Store dimensions as dynamic attribute for MRL support
+        req.dimensions = dimensions
+        return req
 
     def serialize(self, data: EmbeddingResponse) -> bytes:
         # llmspec's to_json() already returns bytes
@@ -245,10 +262,25 @@ class EmbeddingWorker(Worker):
                 f"the requested model {{data.model}} is not supported by "
                 f"this worker {{self.model_name}}"
             )
+
         token_count, embeddings = self.get_embeddings(data.input)
         embeddings = embeddings.detach()
         if self.device != "cpu":
             embeddings = embeddings.cpu()
+
+        # MRL dimension truncation (Matryoshka Representation Learning)
+        # If dimensions parameter is provided, truncate to that dimension
+        requested_dim = getattr(data, 'dimensions', None)
+        if requested_dim is not None:
+            if requested_dim < 1:
+                raise ClientError(f"dimensions must be >= 1, got {{requested_dim}}")
+            if self.dimensions is not None and requested_dim > self.dimensions:
+                raise ClientError(
+                    f"dimensions {{requested_dim}} exceeds model's max dimension {{self.dimensions}}"
+                )
+            # Truncate to requested dimension
+            embeddings = embeddings[:, :requested_dim]
+
         embeddings = embeddings.numpy()
         if data.encoding_format == "base64":
             embeddings = [

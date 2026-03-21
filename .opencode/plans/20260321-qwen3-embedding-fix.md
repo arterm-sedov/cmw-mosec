@@ -1,6 +1,6 @@
 # Qwen3 Embedding Fix Session
 **Date:** 2026-03-21
-**Status:** Investigation Complete, Fix Needed
+**Status:** ✅ COMPLETE
 
 ## Summary
 Investigated why Qwen3-Embedding models fail in cmw-mosec while working perfectly with transformers directly. Root cause identified.
@@ -81,11 +81,44 @@ self.tokenizer = transformers.AutoTokenizer.from_pretrained(
 4. cmw-mosec reranker endpoints - ✅ Work
 5. FRIDA embedding - ✅ Works
 
-## Next Steps
-1. Apply fix to `server_manager.py`
-2. Test Qwen3-Embedding endpoint
-3. Verify FRIDA still works
-4. Update AGENTS.md with lessons learned
+## Fix Applied
+**Commit:** `0aabd76`
+
+Changed `cmw_mosec/server_manager.py` line 148-160:
+```python
+# LLM-based embedders (Qwen3) need left padding for last_token pooling
+# Encoder-based (FRIDA) use default right padding
+if self.pooling == "last_token":
+    self.tokenizer = transformers.AutoTokenizer.from_pretrained(
+        self.model_name,
+        padding_side='left'
+    )
+else:
+    self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name)
+```
+
+## Testing Results
+- Qwen/Qwen3-Embedding-0.6B ✅ Works (dim 1024)
+- Qwen/Qwen3-Embedding-4B ✅ Works (dim 2560)
+- Both tested with instruction formatting
+
+## Root Cause Analysis
+The issue was in the `EmbeddingWorker.__init__()` method. Qwen3-Embedding models are based on a **causal language model architecture** (decoder-only), which means:
+- They need to use the **last token** for pooling (not CLS or mean pooling)
+- They require **left padding** so the last token position is meaningful
+- Without left padding, the "last token" is just padding, causing incorrect embeddings
+
+This is similar to how `RerankerWorker` already handles LLM-based rerankers (Qwen3-Reranker uses left padding via line 316).
+
+## Lessons Learned
+1. **Different embedding architectures need different tokenization:**
+   - Encoder-based (FRIDA/T5): right padding + CLS pooling
+   - LLM-based (Qwen3): left padding + last_token pooling
+
+2. **Check HuggingFace model card for pooling requirements**
+   - Qwen3-Embedding docs explicitly mention `padding_side='left'`
+
+3. **Model type determines tokenization, not just pooling method**
 
 ## Related Files
 - `cmw_mosec/server_manager.py` - EmbeddingWorker class
