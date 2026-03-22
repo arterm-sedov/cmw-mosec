@@ -1,7 +1,10 @@
-# Plan: Create Dynamic v2 Server Script
+# Plan: Create Dynamic v2 Server - No Script Generation
 
 ## Objective
-Create a static v2 server that fetches model configurations at runtime using the same sources as cmw-mosec parent.
+Combine server_manager logic (start/stop/health check/PID) with workers (embedding/reranker/guard) into a coherent v2 that:
+- **NO script generation** - workers directly in package
+- **Dynamic config at runtime** - fetches from ModelRegistry
+- **Follows Mosec best practices** - like examples/embedding/server.py
 
 ## Design Principles (from AGENTS.md)
 
@@ -18,82 +21,93 @@ Create a static v2 server that fetches model configurations at runtime using the
 - Line length: 100
 - ruff for linting
 - snake_case for functions/variables, PascalCase for classes
-- Comments: explain why, not what
 
 ---
 
-## CURRENT IMPLEMENTATION ANALYSIS
+## MOSEC BEST PRACTICES (from ~/mosec/examples/embedding/server.py)
 
-### server_manager.py start() does:
-1. Check if running → return early (idempotent)
-2. Load settings via `load_server_settings()`
-3. Validate models via `registry.get_config()`
-4. Generate server script via `_generate_server_script()`
-5. Write script to `~/.cmw-mosec/scripts/mosec_server.py`
-6. Spawn subprocess: `python script.py --port X`
-7. Pass `HF_TOKEN` via env
-8. Wait for health check (60 attempts × 1 sec)
-9. Save PID info with loaded models
-10. Return success/failure + failed models list
+```python
+from mosec import Server, Runtime
 
-### server_manager.py stop() does:
-1. Load PID info
-2. Send SIGTERM
-3. Wait 10 sec for graceful shutdown
-4. Fallback to SIGKILL
-5. Remove PID file
+server = Server()
+emb = Runtime(Embedding)
+server.register_runtime({
+    "/v1/embeddings": [emb],
+    "/embeddings": [emb],
+})
+server.run()
+```
 
-### CLI serve() does:
-1. Load active models from .env
-2. Accept --embedding/--reranker/--guard overrides
-3. Call manager.start()
-4. Display endpoints
+Workers use `os.getenv("MODEL_NAME", default)` for runtime config.
 
 ---
 
-## PLAN: Files TO CREATE
+## FILES TO CREATE
 
 ### 1. `cmw_mosec/v2/__init__.py`
 ```python
+"""Dynamic v2 server - no script generation, runtime config."""
+
 from .dynamic_server import run_server
 
 __all__ = ["run_server"]
 ```
 
 ### 2. `cmw_mosec/v2/workers.py`
-Create these classes with dynamic `__init__`:
 
 **EmbeddingWorkerV2(Worker)**:
-- `__init__`: Call `load_server_settings().active_embedding_model`, then `ModelRegistry().get_embedding_config()`
-- Copy all methods from generated EmbeddingWorker but use `self.max_length` instead of `MAX_LENGTH`
+```python
+class EmbeddingWorkerV2(Worker):
+    def __init__(self):
+        from cmw_mosec.server_config import ModelRegistry, load_server_settings
+        
+        settings = load_server_settings()
+        registry = ModelRegistry()
+        
+        model_slug = os.getenv("ACTIVE_EMBEDDING_MODEL") or settings.active_embedding_model
+        config = registry.get_embedding_config(model_slug.lower())
+        
+        self.model_name = config.model_id
+        self.pooling = config.pooling
+        self.dimensions = config.dimensions
+        self.max_length = config.max_length
+        self.model_class = config.model_class or "AutoModel"
+        
+        # ... rest of __init__ with dynamic config
+```
 
-**RerankerWorkerV2(Worker)**:
-- `__init__`: Call `load_server_settings().active_reranker_model`, then `ModelRegistry().get_reranker_config()`
-- Copy `_compute_scores` from generated RerankerWorker
+**RerankerWorkerV2(Worker)**: Similar pattern with `registry.get_reranker_config()`
 
-**ScoreWorkerV2(RerankerWorkerV2)**:
-- Copy `forward()` from generated ScoreWorker
+**ScoreWorkerV2(RerankerWorkerV2)**: Extends, returns vLLM format
 
-**RerankWorkerV2(RerankerWorkerV2)**:
-- Copy `forward()` from generated RerankWorker
+**RerankWorkerV2(RerankerWorkerV2)**: Extends, returns Cohere format
 
-**GuardWorkerV2(Worker)**:
-- `__init__`: Call `load_server_settings().active_guard_model`, then `ModelRegistry().get_guard_config()`
-- Copy all methods from generated GuardWorker but use `self.max_new_tokens`, `self.max_length`
+**GuardWorkerV2(Worker)**: Similar pattern with `registry.get_guard_config()`
 
 ### 3. `cmw_mosec/v2/dynamic_server.py`
+
 ```python
+"""Dynamic v2 server - follows Mosec examples pattern."""
+
 from mosec import Server, Runtime
-from .workers import EmbeddingWorkerV2, ScoreWorkerV2, RerankWorkerV2, GuardWorkerV2
+from .workers import (
+    EmbeddingWorkerV2,
+    ScoreWorkerV2,
+    RerankWorkerV2,
+    GuardWorkerV2,
+)
 
 def run_server():
+    """Start v2 server with runtime-configured workers."""
     server = Server()
+    
     routes = {
         "/v2/embeddings": [Runtime(EmbeddingWorkerV2)],
         "/v2/score": [Runtime(ScoreWorkerV2)],
         "/v2/rerank": [Runtime(RerankWorkerV2)],
         "/v2/moderate": [Runtime(GuardWorkerV2)],
     }
+    
     server.register_runtime(routes)
     server.run()
 
@@ -103,150 +117,68 @@ if __name__ == "__main__":
 
 ---
 
-## PLAN: Files TO MODIFY
+## FILES TO MODIFY
 
 ### `cmw_mosec/server_manager.py`
 
-Add `start_v2()` method that mirrors `start()` but:
-1. **Idempotent check**: `if self.is_running(): return True, []`
-2. **Model validation**: Call `registry.get_config()` for each model
-3. **Write launcher script**: Creates wrapper that imports `cmw_mosec.v2.dynamic_server`
-4. **Spawn subprocess**: `subprocess.Popen()` with same options as `start()`
-5. **Pass env vars**: `HF_TOKEN` if set
-6. **Health check**: Wait 60 sec for `/v2/embeddings` or health endpoint
-7. **PID management**: Save PID with loaded models to `~/.cmw-mosec/pid.json`
+Add `start_v2()` - same as `start()` but:
+- No script generation
+- Spawn `python -m cmw_mosec.v2.dynamic_server`
+- Pass env vars: `ACTIVE_EMBEDDING_MODEL`, `ACTIVE_RERANKER_MODEL`, `ACTIVE_GUARD_MODEL`
 
 ```python
-def start_v2(
-    self,
-    embedding_model: str | None = None,
-    reranker_model: str | None = None,
-    guard_model: str | None = None,
-    background: bool = True,
-) -> tuple[bool, list[str]]:
-    """Start v2 server with dynamic config.
+def start_v2(self, ...):
+    # Same validation logic as start()
+    # But NO script generation
+    # Set env vars for active models
+    env["ACTIVE_EMBEDDING_MODEL"] = emb_model
+    env["ACTIVE_RERANKER_MODEL"] = rer_model
+    env["ACTIVE_GUARD_MODEL"] = guard_m
     
-    Mirrors start() but uses cmw_mosec.v2.dynamic_server
-    instead of generated script.
-    """
-    # 1. Check if running (idempotent)
-    if self.is_running():
-        logger.info("Server already running")
-        return True, []
-    
-    # 2. Load settings
-    settings = load_server_settings()
-    
-    # 3. Validate models
-    registry = ModelRegistry()
-    # ... validation logic same as start() ...
-    
-    # 4. Write launcher script
-    script_path = self._script_dir / "mosec_server_v2.py"
-    script_path.write_text(f"""
-import sys
-sys.path.insert(0, '{PROJECT_ROOT}')
-from cmw_mosec.v2.dynamic_server import run_server
-run_server()
-""")
-    
-    # 5. Spawn subprocess
-    cmd = [sys.executable, str(script_path), "--port", str(settings.server_port)]
-    env = os.environ.copy()
-    if settings.hf_token:
-        env["HF_TOKEN"] = settings.hf_token
-    
-    process = subprocess.Popen(cmd, ..., env=env)
-    
-    # 6. Save PID
-    _save_server_pid(process.pid, settings.server_port, {
-        "embedding": emb_model,
-        "reranker": rer_model,
-        "guard": guard_m,
-        "version": "v2",  # Track which version started
-    })
-    
-    # 7. Health check
-    for _ in range(60):
-        if _check_server_health_v2(settings.server_port):
-            return True, failed_models
-        time.sleep(1)
+    # Spawn v2 server directly
+    cmd = [sys.executable, "-m", "cmw_mosec.v2.dynamic_server"]
 ```
 
 ### `cmw_mosec/cli.py`
 
-Add `serve-v2` command:
-```python
-@cli.command()
-@click.option("--foreground", "-f", is_flag=True)
-@click.option("--embedding", help="Embedding model")
-@click.option("--reranker", help="Reranker model")
-@click.option("--guard", help="Guard model")
-def serve_v2(foreground, embedding, reranker, guard):
-    """Start v2 server with dynamic config."""
-    manager = MosecServerManager()
-    # Same logic as serve() but calls start_v2()
-    # Display /v2/* endpoints
-```
-
----
-
-## EXACT COPY-TRANSFORM PATTERN
-
-1. Take worker code from `~/.cmw-mosec/scripts/mosec_server.py`
-2. In each `__init__`:
-   - DELETE: `self.model_name = RERANKER_MODEL`
-   - ADD: Config lookup from settings + registry
-3. In methods:
-   - REPLACE: `MAX_LENGTH` → `self.max_length`
-   - REPLACE: `DTYPE` → `self.dtype`
-4. Keep all business logic identical (pooling, MRL truncation, scoring methods)
+Add `serve-v2` command (mirror `serve()` but calls `start_v2()`)
 
 ---
 
 ## COMPLETE FEATURE MAPPING
 
-| Feature | v1 (current) | v2 (plan) |
-|---------|--------------|-----------|
-| Config source | Baked at generation | Runtime lookup |
-| Script | Generated | Static in v2/ |
+| Feature | v1 | v2 |
+|---------|-----|-----|
+| Config | Baked in script | Runtime via env vars |
+| Script generation | Yes | **NO** |
 | Model validation | Yes | Yes |
-| Health check | Yes | Yes (via /v2/) |
 | PID management | Yes | Yes |
 | HF_TOKEN pass | Yes | Yes |
-| Graceful shutdown | Yes (SIGTERM→KILL) | Yes (same) |
-| Idempotent start | Yes | Yes |
-| Endpoints | /v1/* | /v2/* |
+| Graceful shutdown | Yes | Yes |
+| Health check | Yes | Yes |
+| Workers in package | No | **YES** |
+| Mosec pattern | Custom | **Standard** |
+
+---
+
+## Implementation Order
+
+1. Create `cmw_mosec/v2/__init__.py`
+2. Create `cmw_mosec/v2/workers.py` - copy methods from generated script, add dynamic __init__
+3. Create `cmw_mosec/v2/dynamic_server.py` - Mosec standard pattern
+4. Test import: `python -c "from cmw_mosec.v2 import run_server"`
+5. Add `start_v2()` to server_manager.py
+6. Add `serve-v2` CLI command
+7. Full integration test
 
 ---
 
 ## Verification Checklist
 
-1. Tests pass: pytest
-2. Lint passes: ruff check
-3. Shared logic (DRY): Reuse ModelRegistry patterns
-4. Configs in YAML: Already done
-5. Scores identical across endpoints: v1 and v2 produce same results
-6. All models tested: Test with FRIDA, Qwen3, DiTy, BAAI, Guard
-7. CLI commands work: Both v1 and v2 commands functional
-8. Other endpoints unchanged: v1 continues working
-9. README updated: Document v2 usage
-
-## Verification Steps
-
 1. `ruff check cmw_mosec/v2/`
-2. `python -c "from cmw_mosec.v2 import run_server; print('import ok')"`
-3. Test: `cmw-mosec serve-v2 --embedding ai-forever/FRIDA`
+2. Import test: `python -c "from cmw_mosec.v2 import run_server"`
+3. `cmw-mosec serve-v2 --embedding ai-forever/FRIDA`
 4. `curl http://localhost:<port>/v2/embeddings`
-5. `curl http://localhost:<port>/v1/embeddings` (confirm v1 still works)
-6. Compare responses with v1 endpoints
-
-## Implementation Order
-
-1. Create `cmw_mosec/v2/__init__.py`
-2. Create `cmw_mosec/v2/workers.py` - EmbeddingWorkerV2 first
-3. Create `cmw_mosec/v2/dynamic_server.py`
-4. Test import: `python -c "from cmw_mosec.v2 import run_server"`
-5. Add `start_v2()` to server_manager.py (mirror start())
-6. Add `serve-v2` CLI command (mirror serve())
-7. Full integration test
+5. Compare with v1: same results
+6. Test all model types
+7. v1 still works
