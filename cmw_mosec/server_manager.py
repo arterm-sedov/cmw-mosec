@@ -405,29 +405,37 @@ class RerankerWorker(Worker):
         if self.reranker_type == "llm_reranker":
             # LLM reranker: client sends pre-formatted query and documents
             # Server pairs them: query + doc for each document
-            pairs = [query + doc for doc in docs]
+            # Process in batches to avoid GPU memory issues
+            batch_size = 5  # Process 5 docs at a time (conservative for GPU memory)
+            all_scores = []
 
-            inputs = self.tokenizer(
-                pairs, padding=True, truncation=True,
-                return_tensors="pt", max_length=max_length
-            )
-            inputs = {{k: v.to(self.model.device) for k, v in inputs.items()}}
+            for i in range(0, len(docs), batch_size):
+                batch_docs = docs[i:i + batch_size]
+                pairs = [query + doc for doc in batch_docs]
 
-            with torch.no_grad():
-                batch_scores = self.model(**inputs).logits[:, -1, :]
+                inputs = self.tokenizer(
+                    pairs, padding=True, truncation=True,
+                    return_tensors="pt", max_length=max_length
+                )
+                inputs = {{k: v.to(self.model.device) for k, v in inputs.items()}}
 
-                if self.scoring_method == "softmax":
-                    # Softmax over [false_token, true_token], return probability of true
-                    true_vector = batch_scores[:, self.token_true_id]
-                    false_vector = batch_scores[:, self.token_false_id]
-                    stacked = torch.stack([false_vector, true_vector], dim=1)
-                    log_probs = torch.nn.functional.log_softmax(stacked, dim=1)
-                    scores = log_probs[:, 1].exp().tolist()
-                else:
-                    # raw_logit: return raw logit for true token
-                    scores = batch_scores[:, self.token_true_id].tolist()
+                with torch.no_grad():
+                    batch_scores = self.model(**inputs).logits[:, -1, :]
 
-            return scores
+                    if self.scoring_method == "softmax":
+                        # Softmax over [false_token, true_token], return probability of true
+                        true_vector = batch_scores[:, self.token_true_id]
+                        false_vector = batch_scores[:, self.token_false_id]
+                        stacked = torch.stack([false_vector, true_vector], dim=1)
+                        log_probs = torch.nn.functional.log_softmax(stacked, dim=1)
+                        scores = log_probs[:, 1].exp().tolist()
+                    else:
+                        # raw_logit: return raw logit for true token
+                        scores = batch_scores[:, self.token_true_id].tolist()
+
+                all_scores.extend(scores)
+
+            return all_scores
         else:
             # cross_encoder: standard sentence_transformers approach
             # NOTE: Do NOT set model_max_length for cross-encoders
