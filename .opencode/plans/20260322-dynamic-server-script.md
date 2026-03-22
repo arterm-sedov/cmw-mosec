@@ -3,6 +3,23 @@
 ## Objective
 Create a static v2 server that fetches model configurations at runtime using the same sources as cmw-mosec parent.
 
+## Design Principles (from AGENTS.md)
+
+- **Lean**: Minimal code, no overengineering
+- **DRY**: Reuse existing ModelRegistry and settings loading
+- **Non-breaking**: v1 endpoints unchanged
+- **12-Factor**: Config in env vars, stateless processes
+- **Error Handling**: Use logger, try/except around process ops
+
+## Code Requirements
+
+- Type hints required
+- Google docstring convention
+- Line length: 100
+- ruff for linting
+- snake_case for functions/variables, PascalCase for classes
+- Comments: explain why, not what
+
 ## Files TO CREATE
 
 ### 1. `cmw_mosec/v2/__init__.py`
@@ -90,7 +107,19 @@ run_server()
    - REPLACE: `DTYPE` → `self.dtype`
 4. Keep all business logic identical (pooling, MRL truncation, scoring methods)
 
-## VERIFICATION STEPS
+## Verification Checklist
+
+1. Tests pass: pytest
+2. Lint passes: ruff check
+3. Shared logic (DRY): Reuse ModelRegistry patterns
+4. Configs in YAML: Already done
+5. Scores identical across endpoints: v1 and v2 produce same results
+6. All models tested: Test with FRIDA, Qwen3, DiTy, BAAI, Guard
+7. CLI commands work: Both v1 and v2 commands functional
+8. Other endpoints unchanged: v1 continues working
+9. README updated: Document v2 usage
+
+## Verification Steps
 
 1. `ruff check cmw_mosec/v2/`
 2. `python -c "from cmw_mosec.v2 import run_server; print('import ok')"`
@@ -98,7 +127,7 @@ run_server()
 4. `curl http://localhost:<port>/v2/embeddings`
 5. Compare responses with v1 endpoints
 
-## IMPLEMENTATION ORDER
+## Implementation Order
 
 1. Create `cmw_mosec/v2/__init__.py`
 2. Create `cmw_mosec/v2/workers.py` - EmbeddingWorkerV2 first
