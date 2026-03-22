@@ -207,6 +207,7 @@ Test scenarios:
 - **Linting:** Only lint files that were modified, not the entire codebase. Be critical about Ruff reports; implement only necessary changes.
 - **Secrets:** Never hardcode secrets. Use environment variables.
 - **No breakage:** Never break existing code.
+- **Documentation:** After changes, update `.opencode/README.md` and related docs if affected.
 
 ## Code Style
 
