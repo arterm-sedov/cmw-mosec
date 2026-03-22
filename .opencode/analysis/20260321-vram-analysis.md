@@ -68,54 +68,62 @@
 
 ---
 
-## VRAM Usage Calculation
+## VRAM Usage Summary
 
-### Formula
-```
-VRAM ≈ params × bytes_per_param × multiplier
+### All Models - Verified on RTX 4090 (48GB)
 
-Where multiplier accounts for:
-- Activations (1.5-2x for LLM)
-- Attention cache
-- Gradients (inference: 1x)
-```
+| Model | Delta | Workers | Status |
+|-------|-------|---------|--------|
+| **Embeddings** | | | |
+| Qwen3-Embedding-0.6B | +1.9 GB | 1 | ✅ |
+| Qwen3-Embedding-4B | +8.9 GB | 1 | ✅ |
+| Qwen3-Embedding-8B | - | - | **OOM** |
+| **Rerankers (Cross-Encoder)** | | | |
+| DiTy cross-encoder | +2.2 GB | 1 | ✅ |
+| BGE-reranker-v2-m3 | +5.1 GB | 1 | ✅ |
+| **Rerankers (LLM)** | | | |
+| Qwen3-Reranker-0.6B | +1.5 GB | 1 | ✅ |
+| Qwen3-Reranker-4B | +8.1 GB | 1 | ✅ |
+| Qwen3-Reranker-8B | - | - | **OOM** |
+| **Guards** | | | |
+| Qwen3Guard-Gen-0.6B | +1.8 GB | 1 | ✅ |
+| Qwen3Guard-Gen-4B | +8.8 GB | 1 | ✅ |
+| Qwen3Guard-Gen-8B | - | - | **OOM** |
 
-### Verified vs Estimated
+### Combinations Tested
 
-| Model | Verified VRAM | Estimated | Match |
-|-------|-------------|-----------|-------|
-| FRIDA | +3.6 GB | ~4 GB | ✅ |
-| emb 0.6B | +1.9 GB | ~2 GB | ✅ |
-| emb 4B | +8.9 GB | ~9 GB | ✅ |
-| guard 0.6B | +1.8 GB | ~2 GB | ✅ |
-| guard 4B | +8.8 GB | ~9 GB | ✅ |
+| Combination | Delta | Status |
+|------------|-------|--------|
+| emb 0.6B + rer 0.6B | +3.5 GB | ✅ SAFE |
+| emb 4B + rer 0.6B | +10.5 GB | ✅ SAFE |
+| emb + rer + guard (all 0.6B) | +4.9 GB | ⚠️ ERROR (guard conflicts with emb) |
+| FRIDA + DiTy + guard 0.6B | +7.7 GB | ✅ TIGHT (~4.5GB free) |
 
 ---
 
-## Recommended Configurations for RTX 4090 (48GB)
+## 8B Model VRAM Estimates
 
-| Configuration | Embedding | Reranker | Guard | Delta | Free | Status |
-|--------------|-----------|----------|-------|-------|------|--------|
-| **Russian** | FRIDA | DiTy | 0.6B | +7.7 GB | ~10 GB | ✅ |
-| **Multilingual** | 4B | 0.6B | - | +10.5 GB | ~8 GB | ✅ |
-| **Budget** | 0.6B | 0.6B | - | +3.5 GB | ~15 GB | ✅ |
-| **Max Performance** | 4B | 4B | - | +17 GB | ~7 GB | ✅ |
-| **Max All** | 4B | 4B | 4B | +26 GB | ~22 GB | ✅ |
+Based on HuggingFace model cards (stored as bf16):
 
-### NOT Possible on 48GB GPU
+| Model | Parameters | Expected VRAM | Notes |
+|-------|------------|--------------|-------|
+| Qwen3-Embedding-8B | 8B | ~16 GB | 4 shard files |
+| Qwen3-Reranker-8B | 8B | ~16 GB | Finetuned from Qwen3-8B-Base |
+| Qwen3Guard-Gen-8B | 8B | ~18 GB | Higher due to generation |
 
-| Combination | Required VRAM | Status |
-|------------|--------------|--------|
-| Qwen3-Embedding-8B | ~18 GB | OOM on 48GB |
-| Qwen3-Reranker-8B | ~16 GB | OOM on 48GB |
-| Qwen3Guard-Gen-8B | ~18 GB | OOM on 48GB |
-| emb 4B + rer 4B | ~17 GB | ✅ Tight (~31GB free) |
-| emb 4B + guard 4B | ~18 GB | ✅ Tight (~30GB free) |
-| rer 4B + guard 4B | ~17 GB | ✅ (~31GB free) |
-| emb 4B + rer 4B + guard 4B | ~26 GB | ✅ (~22GB free) |
-| emb 4B + 4B reranker + 4B guard | ~26 GB | ✅ (~22GB free) |
+---
 
-**Note:** OOM thresholds vary based on VRAM fragmentation, batch size, and concurrent requests. Values are approximate.
+## OOM and Memory Fragmentation
+
+**OOM Thresholds Vary:**
+- Raw model VRAM + activations + overhead = actual usage
+- VRAM fragmentation from previous allocations can cause OOM even when total fits
+- PyTorch/CUDA memory allocator may not release fragmented memory quickly
+
+**Mitigation:**
+- Load models in consistent order (largest first)
+- Avoid loading/unloading models rapidly
+- Use `torch.cuda.empty_cache()` between model switches
 
 ---
 
@@ -129,21 +137,6 @@ Single Runtime instance shared between both routes.
 **Results:**
 - Qwen3-Reranker-0.6B: **1549 MiB** (was ~3GB with 2 workers)
 - Qwen3-Reranker-4B: **8083 MiB** (was ~16GB with 2 workers)
-
----
-
-## Config Updates Needed
-
-Based on experiments, consider updating `config/models.yaml`:
-
-```yaml
-# Memory estimates (memory_gb):
-Qwen/Qwen3-Reranker-0.6B:
-  memory_gb: 4.0  # Estimate based on 0.6B LLM
-
-Qwen/Qwen3-Reranker-4B:
-  memory_gb: 12.0  # Estimate based on 4B LLM
-```
 
 ---
 
