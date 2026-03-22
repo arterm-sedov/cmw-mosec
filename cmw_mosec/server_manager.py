@@ -446,63 +446,48 @@ class RerankerWorker(Worker):
 
     def forward(self, data: dict[str, Any]) -> dict[str, Any]:
         """Forward pass for reranker endpoint.
-        
-        Returns Cohere/Jina format sorted by relevance.
-        Results include index, document text, and relevance score.
+
+        Supports two formats detected by request parameters:
+        - vLLM score format: "queries" parameter (returns data array)
+        - Cohere format: "query" + "docs" (returns results array)
+
+        Single model instance handles both output formats.
         """
-        query = data["query"]
         docs = data.get("docs") or data.get("documents")
         effective_max_length = data.get("max_length") or self.max_length
-        top_n = data.get("top_n")
-        
-        # Compute raw scores
+
+        # vLLM score format: uses "queries" parameter
+        if "queries" in data:
+            query = data["queries"]
+            if isinstance(query, list):
+                query = query[0] if query else ""
+            scores = self._compute_scores(query, docs, effective_max_length)
+            return {{
+                "data": [
+                    {{"index": i, "object": "score", "score": float(s)}}
+                    for i, s in enumerate(scores)
+                ]
+            }}
+
+        # Cohere format: uses "query" parameter
+        query = data.get("query", "")
         scores = self._compute_scores(query, docs, effective_max_length)
-        
-        # Sort by relevance (descending) and format results
+
+        # Cohere format (standard rerank request)
+        top_n = data.get("top_n")
         indexed_scores = list(enumerate(zip(docs, scores)))
         indexed_scores.sort(key=lambda x: x[1][1], reverse=True)
-        
+
         if top_n is not None:
             indexed_scores = indexed_scores[:top_n]
-        
-        results = [
-            {{
-                "index": i,
-                "document": {{"text": doc}},
-                "relevance_score": float(score)
-            }}
+
+        return {{"results": [
+            {{"index": i, "document": {{"text": doc}}, "relevance_score": float(score)}}
             for i, (doc, score) in indexed_scores
-        ]
-        return {{"results": results}}
+        ]}}
 
 
-class ScoreWorker(RerankerWorker):
-    """Worker for /v1/score endpoint.
-    
-    Returns vLLM format: data array with index and score.
-    Lightweight - no documents returned, just index and score.
-    """
-    
-    def forward(self, data: dict[str, Any]) -> dict[str, Any]:
-        query = data["query"]
-        docs = data.get("docs") or data.get("documents")
-        effective_max_length = data.get("max_length") or self.max_length
-        
-        # Accept "queries" parameter for vLLM compatibility
-        if "queries" in data and query is None:
-            queries_data = data["queries"]
-            query = queries_data[0] if isinstance(queries_data, list) and queries_data else queries_data
-        
-        # Compute raw scores
-        scores = self._compute_scores(query, docs, effective_max_length)
-        
-        # vLLM format: lightweight, no documents
-        return {{
-            "data": [
-                {{"index": i, "object": "score", "score": s}}
-                for i, s in enumerate(scores)
-            ]
-        }}'''
+'''
 
     # Guard worker
     if guard_model:
@@ -677,14 +662,12 @@ if __name__ == "__main__":
     if "EmbeddingWorker" in globals():
         routes["/v1/embeddings"] = [Runtime(EmbeddingWorker)]
 
-    # Register reranker endpoints
+    # Register reranker endpoints (single worker, single memory allocation)
+    # RerankerWorker.forward() handles both vLLM score and Cohere formats
     if "RerankerWorker" in globals():
-        routes["/v1/rerank"] = [Runtime(RerankerWorker)]
-    if "ScoreWorker" in globals():
-        routes["/v1/score"] = [Runtime(ScoreWorker)]
-    elif "RerankerWorker" in globals():
-        # Fallback: use RerankerWorker for /v1/score if ScoreWorker not defined
-        routes["/v1/score"] = [Runtime(RerankerWorker)]
+        reranker = Runtime(RerankerWorker)
+        routes["/v1/rerank"] = [reranker]
+        routes["/v1/score"] = [reranker]
 
     # Register guard endpoint
     if "GuardWorker" in globals():

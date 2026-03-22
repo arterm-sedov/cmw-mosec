@@ -151,7 +151,7 @@ class TestServerLifecycle:
         """Test health check endpoint."""
         port = combined_server
 
-        response = requests.get(f"http://localhost:{port}/health", timeout=5.0)
+        response = requests.get(f"http://localhost:{port}/metrics", timeout=5.0)
         assert response.status_code == 200
 
 
@@ -381,8 +381,7 @@ class TestEmbeddingBehavior:
 
         # Apply prefix client-side (FRIDA uses search_query: for queries)
         test_text = apply_prefix(
-            "Test sentence for embedding dimension check.",
-            TEST_EMBEDDER_CONFIG.query_prefix
+            "Test sentence for embedding dimension check.", TEST_EMBEDDER_CONFIG.query_prefix
         )
 
         response = requests.post(
@@ -411,8 +410,7 @@ class TestEmbeddingBehavior:
 
         # Apply prefix client-side
         test_text = apply_prefix(
-            "Test sentence for normalization check.",
-            TEST_EMBEDDER_CONFIG.query_prefix
+            "Test sentence for normalization check.", TEST_EMBEDDER_CONFIG.query_prefix
         )
 
         response = requests.post(
@@ -436,10 +434,7 @@ class TestEmbeddingBehavior:
         """Test that same input produces consistent embeddings."""
         port = combined_server
         model_id = TEST_EMBEDDER_CONFIG.model_id
-        test_input = apply_prefix(
-            "Consistency test sentence.",
-            TEST_EMBEDDER_CONFIG.query_prefix
-        )
+        test_input = apply_prefix("Consistency test sentence.", TEST_EMBEDDER_CONFIG.query_prefix)
 
         embeddings = []
         for _ in range(3):
@@ -496,7 +491,11 @@ class TestRerankerBehavior:
         model_id = TEST_RERANKER_CONFIG.model_id
 
         query = "Best Russian restaurants in Moscow"
-        documents = ["Good places to eat in Moscow", "Weather in Moscow", "Russian cuisine restaurants"]
+        documents = [
+            "Good places to eat in Moscow",
+            "Weather in Moscow",
+            "Russian cuisine restaurants",
+        ]
 
         all_scores = []
         for _ in range(3):
