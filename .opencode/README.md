@@ -15,10 +15,10 @@ All plans, reports, analysis, code, tests, and configuration files in cmw-mosec.
 | <plans/20260321-qwen3-embedding-fix.md> | Mar 21 | Qwen3-Embedding inference error investigation and fix (COMPLETE) |
 | <plans/20260320-reranker-unification.md> | Mar 20 | Earlier reranker unification plan (superseded by Mar 21 version) |
 | <plans/session_reranker_refactor_20260321.md> | Mar 18–21 | Session log for reranker endpoint refactoring and testing |
-| <plans/fix_duplicate_workers.md> | — | Fix duplicate GPU workers reducing memory usage by ~50% |
-| <plans/qwen3_reranker_implementation.md> | — | Qwen3-Reranker-0.6B MOSEC server: CausalLM reranker, 100+ languages, 32K context |
-| <plans/qwen3guard_implementation.md> | — | Qwen3Guard-Gen-0.6B content safety moderation with three-tier severity classification |
-| <plans/mosec_reranker_implementation.md> | — | Production MOSEC reranker for DiTy Russian cross-encoder with OpenVINO acceleration |
+| <plans/fix_duplicate_workers.md> | Mar 19 | Fix duplicate GPU workers reducing memory usage by ~50% |
+| <plans/qwen3_reranker_implementation.md> | Feb 3 | Qwen3-Reranker-0.6B MOSEC server: CausalLM reranker, 100+ languages, 32K context |
+| <plans/qwen3guard_implementation.md> | Feb 3 | Qwen3Guard-Gen-0.6B content safety moderation with three-tier severity classification |
+| <plans/mosec_reranker_implementation.md> | Feb 3 | Production MOSEC reranker for DiTy Russian cross-encoder with OpenVINO acceleration |
 
 ## Progress Reports
 
