@@ -88,7 +88,7 @@ class EmbeddingWorkerV2(Worker):
         self.device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
         self.model = self.model.to(self.device)
         self.model.eval()
-        self.dtype = os.getenv("DTYPE", "float32")
+        self.dtype = config.dtype
         if self.dtype == "float16" and self.device != "cpu":
             self.model = self.model.half()
         elif self.dtype == "int8":
@@ -177,7 +177,7 @@ class EmbeddingWorkerV2(Worker):
                 )
             embeddings = embeddings[:, :requested_dim]
 
-        embeddings = embeddings.numpy()
+        embeddings = embeddings.float().numpy()
         if data.encoding_format == "base64":
             embeddings = [
                 base64.b64encode(emb.astype(np.float32).tobytes()).decode("utf-8")
@@ -370,7 +370,7 @@ class GuardWorkerV2(Worker):
         self.model_name = config.model_id
         self.max_new_tokens = config.max_new_tokens
         self.max_length = config.max_length
-        self.dtype = os.getenv("DTYPE", "float32")
+        self.dtype = config.dtype
 
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(
             self.model_name,

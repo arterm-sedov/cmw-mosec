@@ -48,3 +48,4 @@ This inventory lists all files changed in cmw-mosec.
 | `.opencode/plans/20260321-qwen3-embedding-fix.md` | Mar 21 | Embedding fixes |
 | `.opencode/analysis/20260321-vram-analysis.md` | Mar 22 | VRAM memory analysis |
 | `.opencode/progress_reports/20260319-*.md` | Mar 19 | Implementation reports |
+| `.opencode/progress_reports/20260322-embedding-bf16-fix-per-model-dtype.md` | Mar 22 | BF16 numpy fix, per-model dtype |
