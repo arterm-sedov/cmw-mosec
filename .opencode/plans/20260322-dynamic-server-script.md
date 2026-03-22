@@ -94,9 +94,13 @@ class EmbeddingWorkerV2(Worker):
 
 ### 3. `cmw_mosec/v2/dynamic_server.py`
 ```python
-"""Dynamic v2 server - follows Mosec examples pattern."""
+"""Dynamic v2 server - follows Mosec examples pattern.
 
-import argparse
+Port is handled by Mosec CLI automatically:
+- CLI: python -m cmw_mosec.v2.dynamic_server --port 8000
+- Env: MOSEC_PORT=8000 python -m cmw_mosec.v2.dynamic_server
+"""
+
 from mosec import Server, Runtime
 from .workers import (
     EmbeddingWorkerV2,
@@ -105,7 +109,7 @@ from .workers import (
     GuardWorkerV2,
 )
 
-def run_server(port: int = 8000):
+def run_server():
     """Start v2 server with runtime-configured workers."""
     server = Server()
     
@@ -117,13 +121,10 @@ def run_server(port: int = 8000):
     }
     
     server.register_runtime(routes)
-    server.run()  # Mosec uses port from environment or default
+    server.run()  # Mosec parses --port / MOSEC_PORT automatically
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
-    run_server(port=args.port)
+    run_server()
 ```
 
 ---
@@ -189,8 +190,8 @@ def start_v2(
     if settings.hf_token:
         env["HF_TOKEN"] = settings.hf_token
 
-    cmd = [sys.executable, "-m", "cmw_mosec.v2.dynamic_server", 
-           "--port", str(settings.server_port)]
+    cmd = [sys.executable, "-m", "cmw_mosec.v2.dynamic_server", "--port",
+           str(settings.server_port)]
 
     # 5. Process management - SAME as start()
     if background:
@@ -250,9 +251,12 @@ Add `serve-v2` command (mirror `serve()` but calls `start_v2()`)
 ## Implementation Order
 
 1. Create `cmw_mosec/v2/__init__.py`
-2. Create `cmw_mosec/v2/workers.py` - copy methods from generated script, add dynamic `__init__`
-3. Create `cmw_mosec/v2/dynamic_server.py` - with argparse for --port
-4. Test direct run: `ACTIVE_EMBEDDING_MODEL=ai-forever/FRIDA python -m cmw_mosec.v2.dynamic_server`
+2. Create `cmw_mosec/v2/workers.py`:
+   - Copy worker methods from `~/.cmw-mosec/scripts/mosec_server.py`
+   - Replace hardcoded constants (`EMBEDDING_MODEL`, `MAX_LENGTH`, etc.) with `self.*` from config lookup
+   - Add dynamic `__init__` that reads env vars + ModelRegistry
+3. Create `cmw_mosec/v2/dynamic_server.py` - Mosec standard pattern
+4. Test direct run: `python -m cmw_mosec.v2.dynamic_server --port 8000`
 5. Add `start_v2()` to server_manager.py (exact mirror of `start()`)
 6. Add `serve-v2` CLI command
 7. Full integration test
@@ -262,11 +266,11 @@ Add `serve-v2` command (mirror `serve()` but calls `start_v2()`)
 ## Verification Checklist
 
 1. `ruff check cmw_mosec/v2/`
-2. Direct run: `ACTIVE_EMBEDDING_MODEL=ai-forever/FRIDA python -m cmw_mosec.v2.dynamic_server --port 8000`
-3. `curl http://localhost:8000/v2/embeddings`
+2. Direct run: `python -m cmw_mosec.v2.dynamic_server --port 8000` (needs env vars set externally)
+3. Health check: `curl http://localhost:8000/metrics`
 4. `cmw-mosec serve-v2 --embedding ai-forever/FRIDA`
-5. Compare with v1: same results
-6. Test all model types
-7. v1 still works
-8. Tests pass: pytest
-9. `ruff check cmw_mosec/server_manager.py` after changes
+5. Compare v2 `/v2/embeddings` with v1 `/v1/embeddings`: identical results
+6. Test all model types: FRIDA, Qwen3, DiTy, BAAI, Guard
+7. v1 still works: `cmw-mosec serve` unchanged
+8. Tests pass: `pytest`
+9. `ruff check cmw_mosec/server_manager.py`
