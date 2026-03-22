@@ -87,8 +87,6 @@ class MosecServerManager:
 
     def __init__(self):
         self.pid_dir = PID_DIR
-        self._script_dir = PID_DIR / "scripts"
-        self._script_dir.mkdir(parents=True, exist_ok=True)
 
     def get_status(self) -> ServerStatus:
         """Get status of the combined server."""
