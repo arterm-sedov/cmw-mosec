@@ -202,7 +202,7 @@ Test scenarios:
 
 ## Agent Behavior
 
-- **Planning:** Plan your course of action before implementing. Write a plan to `.opencode/plans/` that is lean, dry, TDD-first, and follows SDD/DDD/clean architecture principles.
+- **Planning:** Plan your course of action before implementing. Write a plan to `.opencode/plans/` that is lean, dry, actionable, step-by-step, verifiable, brilliant, and follows best SWE practices — TDD-first, SDD/DDD, clean architecture.
 - **Verification:** Run `ruff check <modified_file>` after changes. Run relevant tests. Reanalyze changes for introduced issues.
 - **Linting:** Only lint files that were modified, not the entire codebase. Be critical about Ruff reports; implement only necessary changes.
 - **Secrets:** Never hardcode secrets. Use environment variables.
