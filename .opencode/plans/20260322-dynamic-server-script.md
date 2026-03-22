@@ -21,7 +21,6 @@ Combine server_manager logic (start/stop/health check/PID) with workers (embeddi
 - Line length: 100
 - ruff for linting
 - snake_case for functions/variables, PascalCase for classes
-- Follow cmw-mosec MIT license (no Apache header needed - that's Mosec's license)
 
 ---
 
