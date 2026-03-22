@@ -12,16 +12,26 @@ import time
 import pytest
 import requests
 
-from cmw_mosec.server_config import (
-    ModelRegistry,
-    load_active_models,
-    load_server_settings,
-)
+from pathlib import Path
+
+import yaml
+from cmw_mosec.server_config import ModelRegistry, load_server_settings
 from cmw_mosec.server_manager import (
     MosecServerManager,
     _check_server_health,
     _remove_server_pid,
 )
+
+
+def load_test_config():
+    """Load test models from test_config.yaml."""
+    config_path = Path(__file__).parent / "test_config.yaml"
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    return config["embedding"], config["reranker"], config["guard"]
+
+
+TEST_EMBEDDER_SLUG, TEST_RERANKER_SLUG, TEST_GUARD_SLUG = load_test_config()
 
 
 def get_active_config(model_slug: str):
@@ -39,12 +49,7 @@ def get_active_config(model_slug: str):
 
 
 SETTINGS = load_server_settings()
-ACTIVE_MODELS = load_active_models()
-
 TEST_PORT = SETTINGS.server_port
-TEST_EMBEDDER_SLUG = ACTIVE_MODELS["embedding"]
-TEST_RERANKER_SLUG = ACTIVE_MODELS["reranker"]
-TEST_GUARD_SLUG = ACTIVE_MODELS["guard"]
 
 TEST_EMBEDDER_CONFIG = get_active_config(TEST_EMBEDDER_SLUG)
 TEST_RERANKER_CONFIG = get_active_config(TEST_RERANKER_SLUG)
@@ -85,14 +90,14 @@ def manager():
 
 @pytest.fixture
 def combined_server(manager):
-    """Start the combined server for testing."""
+    """Start the combined server for testing (emb + reranker, no guard to save VRAM)."""
     manager.stop()
     _remove_server_pid()
 
     success, failed = manager.start(
         embedding_model=TEST_EMBEDDER_SLUG,
         reranker_model=TEST_RERANKER_SLUG,
-        guard_model=TEST_GUARD_SLUG,
+        guard_model=None,
         background=True,
     )
     if not success:
@@ -107,6 +112,34 @@ def combined_server(manager):
     else:
         manager.stop()
         pytest.skip("Combined server failed to become healthy within timeout")
+
+    yield TEST_PORT
+
+    manager.stop()
+
+
+@pytest.fixture
+def guard_server(manager):
+    """Start server with guard model only."""
+    manager.stop()
+    _remove_server_pid()
+
+    success, failed = manager.start(
+        embedding_model=None,
+        reranker_model=None,
+        guard_model=TEST_GUARD_SLUG,
+        background=True,
+    )
+    if not success:
+        pytest.skip(f"Failed to start guard server. Failed: {failed}")
+
+    for _ in range(120):
+        if _check_server_health(TEST_PORT, timeout=2.0):
+            break
+        time.sleep(1)
+    else:
+        manager.stop()
+        pytest.skip("Guard server failed to become healthy")
 
     yield TEST_PORT
 
@@ -280,8 +313,12 @@ class TestRerankingAPI:
         assert response.status_code == 200
         data = response.json()
 
-        assert "scores" in data
-        scores = data["scores"]
+        # LLM reranker returns "results", cross-encoder returns "scores"
+        assert "scores" in data or "results" in data
+        if "scores" in data:
+            scores = data["scores"]
+        else:
+            scores = [r["relevance_score"] for r in data["results"]]
         assert len(scores) == len(documents)
 
         for score in scores:
@@ -314,10 +351,12 @@ class TestRerankingAPI:
         assert response.status_code == 200
         data = response.json()
 
-        scores = data["scores"]
-        # Scores are in same order as input documents
-        sorted_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+        if "scores" in data:
+            scores = data["scores"]
+        else:
+            scores = [r["relevance_score"] for r in data["results"]]
 
+        sorted_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
         top_indices = sorted_indices[:2]
         ai_related_indices = [1, 3]
 
@@ -329,9 +368,9 @@ class TestRerankingAPI:
 class TestGuardAPI:
     """Test guard/moderation API calls."""
 
-    def test_moderate_safe_content(self, combined_server):
+    def test_moderate_safe_content(self, guard_server):
         """Test moderating safe content."""
-        port = combined_server
+        port = guard_server
 
         response = requests.post(
             f"http://localhost:{port}/v1/moderate",
@@ -346,9 +385,9 @@ class TestGuardAPI:
         assert "categories" in data
         assert "safety_level" in data
 
-    def test_moderate_unsafe_content(self, combined_server):
+    def test_moderate_unsafe_content(self, guard_server):
         """Test moderating unsafe content."""
-        port = combined_server
+        port = guard_server
 
         response = requests.post(
             f"http://localhost:{port}/v1/moderate",
@@ -551,9 +590,9 @@ class TestGuardBehavior:
     - Refusal: Yes|No (for response moderation only)
     """
 
-    def test_guard_output_format(self, combined_server):
+    def test_guard_output_format(self, guard_server):
         """Test guard output follows HuggingFace docs format."""
-        port = combined_server
+        port = guard_server
 
         response = requests.post(
             f"http://localhost:{port}/v1/moderate",
@@ -577,9 +616,9 @@ class TestGuardBehavior:
         categories = data["categories"]
         assert isinstance(categories, list), "Categories should be a list"
 
-    def test_guard_violent_content_flagged(self, combined_server):
+    def test_guard_violent_content_flagged(self, guard_server):
         """Test that violent content is flagged."""
-        port = combined_server
+        port = guard_server
 
         response = requests.post(
             f"http://localhost:{port}/v1/moderate",
@@ -594,9 +633,9 @@ class TestGuardBehavior:
         assert data["safety_level"] == "Unsafe"
         assert "Violent" in data["categories"]
 
-    def test_guard_safe_content_safe_level(self, combined_server):
+    def test_guard_safe_content_safe_level(self, guard_server):
         """Test that safe content returns Safe level."""
-        port = combined_server
+        port = guard_server
 
         response = requests.post(
             f"http://localhost:{port}/v1/moderate",

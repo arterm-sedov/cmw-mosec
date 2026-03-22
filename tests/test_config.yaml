@@ -1,0 +1,10 @@
+# Test Configuration
+# Used by tests/test_cpu_integration.py
+# Override with TEST_EMBEDDING, TEST_RERANKER, TEST_GUARD env vars if needed
+
+# Models for combined server fixture (emb + reranker)
+embedding: "Qwen/Qwen3-Embedding-0.6B"
+reranker: "Qwen/Qwen3-Reranker-0.6B"
+
+# Models for guard server fixture (guard only)
+guard: "Qwen/Qwen3Guard-Gen-0.6B"
