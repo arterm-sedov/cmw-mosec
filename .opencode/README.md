@@ -10,31 +10,31 @@ All plans, reports, analysis, code, tests, and configuration files in cmw-mosec.
 
 | File | Date | Description |
 |------|------|-------------|
-| <plans/20260322-dynamic-server-script.md> | Mar 22 | Replace script generation with dynamic runtime server configuration |
-| <plans/20260321-reranker-unification.md> | Mar 21 | Final reranker plan: separate workers, vLLM `queries` param (COMPLETE, supersedes Mar 20) |
-| <plans/20260321-qwen3-embedding-fix.md> | Mar 21 | Qwen3-Embedding inference error investigation and fix (COMPLETE) |
-| <plans/20260320-reranker-unification.md> | Mar 20 | Earlier reranker unification plan (superseded by Mar 21 version) |
-| <plans/session_reranker_refactor_20260321.md> | Mar 18–21 | Session log for reranker endpoint refactoring and testing |
-| <plans/fix_duplicate_workers.md> | Mar 19 | Fix duplicate GPU workers reducing memory usage by ~50% |
-| <plans/qwen3_reranker_implementation.md> | Feb 3 | Qwen3-Reranker-0.6B MOSEC server: CausalLM reranker, 100+ languages, 32K context |
-| <plans/qwen3guard_implementation.md> | Feb 3 | Qwen3Guard-Gen-0.6B content safety moderation with three-tier severity classification |
-| <plans/mosec_reranker_implementation.md> | Feb 3 | Production MOSEC reranker for DiTy Russian cross-encoder with OpenVINO acceleration |
+| <plans/20260322-dynamic-server-script.md> | 2026-03-22 | Replace script generation with dynamic runtime server configuration |
+| <plans/20260321-reranker-unification.md> | 2026-03-21 | Final reranker plan: separate workers, vLLM `queries` param (COMPLETE, supersedes Mar 20) |
+| <plans/20260321-qwen3-embedding-fix.md> | 2026-03-21 | Qwen3-Embedding inference error investigation and fix (COMPLETE) |
+| <plans/20260320-reranker-unification.md> | 2026-03-20 | Earlier reranker unification plan (superseded by Mar 21 version) |
+| <plans/session_reranker_refactor_20260321.md> | 2026-03-18 | Session log for reranker endpoint refactoring and testing |
+| <plans/fix_duplicate_workers.md> | 2026-03-19 | Fix duplicate GPU workers reducing memory usage by ~50% |
+| <plans/qwen3_reranker_implementation.md> | 2026-02-03 | Qwen3-Reranker-0.6B MOSEC server: CausalLM reranker, 100+ languages, 32K context |
+| <plans/qwen3guard_implementation.md> | 2026-02-03 | Qwen3Guard-Gen-0.6B content safety moderation with three-tier severity classification |
+| <plans/mosec_reranker_implementation.md> | 2026-02-03 | Production MOSEC reranker for DiTy Russian cross-encoder with OpenVINO acceleration |
 
 ## Progress Reports
 
 | File | Date | Description |
 |------|------|-------------|
-| <progress_reports/20260322-embedding-bf16-fix-per-model-dtype.md> | Mar 22 | Fix BFloat16 error in Qwen3-Embedding, add per-model dtype support |
-| <progress_reports/20260319-final-summary.md> | Mar 19 | Summary: Qwen3-Reranker support, configurable max_length, instruction handling |
-| <progress_reports/20260319-implementation-fixes.md> | Mar 19 | Fix Qwen3-Reranker inference errors and padding token issues |
-| <progress_reports/20260319-reranker-models-comparison.md> | Mar 19 | Comparison: DiTy, Qwen3-Reranker-0.6B, BGE-reranker-v2-m3 |
-| <progress_reports/20260319-reranker-comparison-analysis.md> | Mar 19 | Detailed comparative analysis with test datasets |
+| <progress_reports/20260322-embedding-bf16-fix-per-model-dtype.md> | 2026-03-22 | Fix BFloat16 error in Qwen3-Embedding, add per-model dtype support |
+| <progress_reports/20260319-final-summary.md> | 2026-03-19 | Summary: Qwen3-Reranker support, configurable max_length, instruction handling |
+| <progress_reports/20260319-implementation-fixes.md> | 2026-03-19 | Fix Qwen3-Reranker inference errors and padding token issues |
+| <progress_reports/20260319-reranker-models-comparison.md> | 2026-03-19 | Comparison: DiTy, Qwen3-Reranker-0.6B, BGE-reranker-v2-m3 |
+| <progress_reports/20260319-reranker-comparison-analysis.md> | 2026-03-19 | Detailed comparative analysis with test datasets |
 
 ## Analysis
 
 | File | Date | Description |
 |------|------|-------------|
-| <analysis/20260321-vram-analysis.md> | Mar 22 | VRAM memory analysis for all supported models on RTX 4090 (48GB) |
+| <analysis/20260321-vram-analysis.md> | 2026-03-22 | VRAM memory analysis for all supported models on RTX 4090 (48GB) |
 
 ---
 
