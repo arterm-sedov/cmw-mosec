@@ -1,126 +1,89 @@
-# Plan: Modify Existing Script Generator for Dynamic Configuration
+# Plan: Create Dynamic v2 Server Script
 
 ## Objective
-Modify the existing `_generate_server_script()` function in server_manager.py to generate a server script where:
-1. Model configurations are fetched at runtime by worker classes (not baked in during generation)
-2. Workers use the same configuration sources as the parent cmw-mosec process
-3. Endpoints are served at `/v2/` to avoid conflicts with existing v1 endpoints
+Create a static v2 server script that fetches model configurations at runtime using the same sources as cmw-mosec parent, rather than having them baked in during generation.
 
 ## Core Insight
-Instead of baking configuration constants into the generated script during generation time, we will modify worker `__init__` methods to fetch current configuration from the same sources as the parent cmw-mosec process (ModelRegistry, environment, settings) at worker initialization time.
+Instead of modifying the script generator, we will:
+1. Create a new directory `cmw_mosec/v2/`
+2. Copy the generated script structure as a static file
+3. Modify worker `__init__` methods to fetch config dynamically from cmw-mosec's sources
+4. Serve at `/v2/` endpoints
 
-## Transformation Plan
+## Approach
 
-### 1. Modify _generate_server_script() Function
-Update the existing function to generate workers that perform runtime configuration lookup instead of using hardcoded constants.
-
-### 2. Replace Bake-Time Constants with Runtime Lookup
-Instead of generating lines like:
-```python
-EMBEDDING_MODEL = "{embedding_model}"
-DTYPE = "{embed_dtype}"
+### 1. Create Directory Structure
 ```
-We will generate worker `__init__` methods that fetch these values at runtime using:
-```python
-from cmw_mosec.server_config import ModelRegistry, load_server_settings
-import os
-
-settings = load_server_settings()
-registry = ModelRegistry()
-embedding_model = getattr(settings, 'active_embedding_model', None) or os.getenv("ACTIVE_EMBEDDING_MODEL")
-config = registry.get_embedding_config(embedding_model.lower())
+cmw_mosec/v2/
+├── __init__.py
+├── dynamic_server.py  # The dynamic v2 server script
+└── workers.py          # Worker classes that fetch config dynamically
 ```
 
-### 3. Modify EmbeddingWorker.__init__()
-Replace hardcoded constant assignments with runtime lookup:
+### 2. Take Existing Generated Script as Base
+Use the generated script at `~/.cmw-mosec/scripts/mosec_server.py` as the template, but modify it to:
+- Fetch configuration at runtime instead of using hardcoded constants
+- Use the same patterns as cmw-mosec parent (`ModelRegistry`, `load_server_settings`)
+
+### 3. Modify Worker Classes to Use Dynamic Config
+Replace hardcoded constants with runtime lookup:
+
 ```python
-def __init__(self):
-    from cmw_mosec.server_config import ModelRegistry, load_server_settings
-    import os
-    
-    settings = load_server_settings()
-    registry = ModelRegistry()
-    
-    # Get embedding model from settings (set by cmw-mosec) or environment
-    embedding_model = getattr(settings, 'active_embedding_model', None) or os.getenv("ACTIVE_EMBEDDING_MODEL")
-    if not embedding_model:
-        # Fallback for direct execution
-        embedding_model = os.getenv("EMBEDDING_MODEL", "ai-forever/FRIDA")
-    
-    config = registry.get_embedding_config(embedding_model.lower())
-    
-    self.model_name = config.model_id
-    self.pooling = config.pooling
-    self.dimensions = config.dimensions
-    self.max_length = config.max_length
-    self.model_class = config.model_class or "AutoModel"  # sensible default
+# Instead of:
+RERANKER_MODEL = "DiTy/cross-encoder-russian-msmarco"
+MAX_LENGTH = 512
 
-    # LLM-based embedders (Qwen3) need left padding for last_token pooling
-    # Encoder-based (FRIDA) use default right padding
-    if self.pooling == "last_token":
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(
-            self.model_name,
-            padding_side='left'
-        )
-    else:
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_name)
-
-    # Load model class from config (e.g., T5EncoderModel for FRIDA, AutoModel for others)
-    if self.model_class == "T5EncoderModel":
-        self.model = transformers.T5EncoderModel.from_pretrained(self.model_name)
-    else:
-        self.model = transformers.AutoModel.from_pretrained(self.model_name)
-
-    self.device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
-    self.model = self.model.to(self.device)
-    self.model.eval()
-    if settings.dtype == "float16" and self.device != "cpu":
-        self.model = self.model.half()
-    elif settings.dtype == "int8":
-        self.model = self.model.quantized = True
+# Use:
+class RerankerWorker(Worker):
+    def __init__(self):
+        from cmw_mosec.server_config import ModelRegistry, load_server_settings
+        
+        settings = load_server_settings()
+        registry = ModelRegistry()
+        
+        # Get reranker model from settings (set by cmw-mosec) or environment
+        reranker_model = getattr(settings, 'active_reranker_model', None) or os.getenv("ACTIVE_RERANKER_MODEL")
+        
+        config = registry.get_reranker_config(reranker_model.lower())
+        
+        self.model_name = config.model_id
+        self.max_length = config.max_length
+        self.reranker_type = config.reranker_type
+        # ... etc
 ```
 
-### 4. Modify RerankerWorker.__init__()
-Apply similar dynamic lookup for reranker configuration using `registry.get_reranker_config()`.
+### 4. Update Endpoints to /v2/
+Change from:
+- `/v1/embeddings` → `/v2/embeddings`
+- `/v1/score` → `/v2/score`
+- `/v1/rerank` → `/v2/rerank`
+- `/v1/moderate` → `/v2/moderate`
 
-### 5. Modify GuardWorker.__init__()
-Apply similar dynamic lookup for guard configuration using `registry.get_guard_config()`.
+### 5. Update server_manager.py
+Add a new method to launch the v2 server:
+- Instead of generating a script, instantiate workers directly from `cmw_mosec.v2.workers`
+- Register routes with `/v2/` endpoints
+- Launch via `subprocess.Popen()` similar to current approach
 
-### 6. Update Endpoint Registration
-Change endpoint paths from `/v1/` to `/v2/`:
-```python
-# Register embedding endpoint
-if "EmbeddingWorker" in globals():
-    routes["/v2/embeddings"] = [Runtime(EmbeddingWorker)]
+## Key Differences from v1
 
-# Register reranker endpoints with separate workers for each format
-# ScoreWorker: /v2/score -> vLLM format {data: [...]}}
-# RerankWorker: /v2/rerank -> Cohere format {results: [...]}}
-if "ScoreWorker" in globals():
-    routes["/v2/score"] = [Runtime(ScoreWorker)]
-if "RerankWorker" in globals():
-    routes["/v2/rerank"] = [Runtime(RerankWorker)]
+| Aspect | v1 (Current) | v2 (New) |
+|--------|-------------|----------|
+| Config source | Baked in at generation | Fetched at runtime |
+| Script | Generated on-demand | Static file in v2/ |
+| Flexibility | Needs regeneration for config change | Works with any model combo |
+| Endpoints | /v1/* | /v2/* |
 
-# Register guard endpoint
-if "GuardWorker" in globals():
-    routes["/v2/moderate"] = [Runtime(GuardWorker)]
-```
+## Benefits
 
-## Key Benefits
+1. **No generator modification**: Works with existing `_generate_server_script()`
+2. **True dynamic config**: Workers fetch from ModelRegistry at init time
+3. **Same patterns as parent**: Reuses cmw-mosec's own config loading
+4. **Backward compatible**: v1 endpoints unchanged
+5. **Easy to maintain**: Static file, easy to edit/debug
 
-1. **Eliminates regeneration need for config changes**: Same generated script works for different model combinations
-2. **True dynamic configuration**: Workers fetch current configuration at initialization time
-3. **Leverages existing cmw-mosec infrastructure**: Uses same ModelRegistry and settings loading as parent process
-4. **Backward compatibility**: v1 endpoints remain unchanged and functional
-5. **Clean upgrade path**: Users can migrate to v2 endpoints when ready without breaking existing functionality
-
-## Validation Approach
-1. Verify modified `_generate_server_script()` produces valid dynamic script
-2. Test that generated script starts successfully
-3. Confirm all v2 endpoints respond correctly with different model combinations
-4. Validate model-specific behaviors (pooling methods, MRL truncation, etc.)
-5. Ensure error handling works for invalid configurations
-6. Verify v1 endpoints continue to work as before (backward compatibility)
-7. Test that configuration changes are picked up without script regeneration
-
-This approach modifies the existing script generator to produce runtime-configurable workers, achieving the goal of dynamic configuration fetching while maintaining simplicity and backward compatibility.
+## Validation
+1. Test v2 server starts successfully
+2. Verify all v2 endpoints respond correctly
+3. Confirm model-specific behaviors work
+4. Ensure v1 endpoints still work
