@@ -21,7 +21,7 @@ Combine server_manager logic (start/stop/health check/PID) with workers (embeddi
 - Line length: 100
 - ruff for linting
 - snake_case for functions/variables, PascalCase for classes
-- Include Apache 2.0 license header (per Mosec examples)
+- Follow cmw-mosec MIT license (no Apache header needed - that's Mosec's license)
 
 ---
 
@@ -64,7 +64,7 @@ __all__ = ["run_server"]
 ```
 
 ### 2. `cmw_mosec/v2/workers.py`
-Apache 2.0 header + worker classes
+Worker classes with dynamic config (MIT licensed)
 
 **EmbeddingWorkerV2(Worker)**:
 ```python
@@ -176,7 +176,7 @@ Add `serve-v2` command (mirror `serve()` but calls `start_v2()`)
 ## Implementation Order
 
 1. Create `cmw_mosec/v2/__init__.py`
-2. Create `cmw_mosec/v2/workers.py` - with Apache header, dynamic `__init__`
+2. Create `cmw_mosec/v2/workers.py` - with dynamic `__init__`
 3. Create `cmw_mosec/v2/dynamic_server.py` - Mosec standard pattern
 4. Test direct run: `python -m cmw_mosec.v2` (needs env vars set)
 5. Test import: `python -c "from cmw_mosec.v2 import run_server"`
