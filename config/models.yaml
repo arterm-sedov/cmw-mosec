@@ -110,6 +110,7 @@ reranker_models:
   # Qwen3 Reranker Series (multilingual, 119+ languages)
   # LLM-based reranker using yes/no softmax scoring
   # Client MUST format query/documents with ChatML prefix/suffix before sending
+  # Model supports 32k context, but max_length controls memory usage
   Qwen/Qwen3-Reranker-0.6B:
     model_id: Qwen/Qwen3-Reranker-0.6B
     reranker_type: llm_reranker
@@ -122,6 +123,7 @@ reranker_models:
     memory_gb: 2.0
     workers: 1
     max_length: 8192
+    inference_batch_size: 5
     description: "0.6B params, requires client-side ChatML formatting"
 
   Qwen/Qwen3-Reranker-4B:
@@ -135,7 +137,8 @@ reranker_models:
     batch_size: 16
     memory_gb: 12.0
     workers: 1
-    max_length: 32768
+    max_length: 8192
+    inference_batch_size: 3
     description: "4B params, requires client-side ChatML formatting"
 
   Qwen/Qwen3-Reranker-8B:
@@ -149,7 +152,8 @@ reranker_models:
     batch_size: 8
     memory_gb: 22.0
     workers: 1
-    max_length: 32768
+    max_length: 8192
+    inference_batch_size: 2
     description: "8B params, requires client-side ChatML formatting"
 
 ################################################################################

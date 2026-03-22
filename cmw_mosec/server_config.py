@@ -186,6 +186,9 @@ class MosecModelConfig(BaseModel):
         default=None, description="Tokens for scoring (e.g., {true: 'yes', false: 'no'})"
     )
     max_length: int | None = Field(default=None, description="Max sequence length (rerankers)")
+    inference_batch_size: int | None = Field(
+        default=None, description="Docs to process per batch for LLM rerankers (GPU memory control)"
+    )
 
     @field_validator("workers", mode="before")
     @classmethod

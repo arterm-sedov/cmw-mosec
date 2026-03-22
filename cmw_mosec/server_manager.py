@@ -329,6 +329,7 @@ class EmbeddingWorker(Worker):
         reranker_type = config.get("reranker_type", "cross_encoder")
         scoring_method = config.get("scoring_method")
         scoring_tokens = config.get("scoring_tokens", {})
+        inference_batch_size = config.get("inference_batch_size", 5)
 
         # Format scoring_method for embedding in generated code
         scoring_method_str = f'"{scoring_method}"' if scoring_method else "None"
@@ -353,6 +354,7 @@ MAX_LENGTH = {reranker_max_length}
 RERANKER_TYPE = "{reranker_type}"
 SCORING_METHOD = {scoring_method_str}
 SCORING_TOKENS = {scoring_tokens_str}
+INFERENCE_BATCH_SIZE = {inference_batch_size}
 
 
 class RerankerWorker(Worker):
@@ -364,6 +366,7 @@ class RerankerWorker(Worker):
         self.reranker_type = RERANKER_TYPE
         self.scoring_method = SCORING_METHOD
         self.scoring_tokens = SCORING_TOKENS
+        self.inference_batch_size = INFERENCE_BATCH_SIZE
 
         if self.reranker_type == "llm_reranker":
             # Use AutoModelForCausalLM for LLM-based rerankers
@@ -406,7 +409,7 @@ class RerankerWorker(Worker):
             # LLM reranker: client sends pre-formatted query and documents
             # Server pairs them: query + doc for each document
             # Process in batches to avoid GPU memory issues
-            batch_size = 5  # Process 5 docs at a time (conservative for GPU memory)
+            batch_size = self.inference_batch_size
             all_scores = []
 
             for i in range(0, len(docs), batch_size):
