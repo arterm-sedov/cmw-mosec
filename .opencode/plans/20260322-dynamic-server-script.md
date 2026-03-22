@@ -1,107 +1,109 @@
 # Plan: Create Dynamic v2 Server Script
 
 ## Objective
-Create a static v2 server that fetches model configurations at runtime using the same sources as cmw-mosec parent, rather than having them baked in during generation.
+Create a static v2 server that fetches model configurations at runtime using the same sources as cmw-mosec parent.
 
-## Core Insight
-Create a new directory `cmw_mosec/v2/` with static Python files that:
-1. Fetch configuration at runtime from cmw-mosec's sources (ModelRegistry, settings, env vars)
-2. Serve at `/v2/` endpoints
-3. Follow existing cmw-mosec patterns exactly
+## Files TO CREATE
 
-## Architecture
-
-```
-cmw_mosec/v2/
-├── __init__.py           # Package exports
-├── workers.py           # Worker classes with dynamic config lookup
-└── dynamic_server.py    # Mosec server setup with /v2/ endpoints
-```
-
-## Implementation Steps
-
-### 1. Create cmw_mosec/v2/__init__.py
-Export workers and server components.
-
-### 2. Create cmw_mosec/v2/workers.py
-Worker classes that fetch config dynamically:
-
-- **EmbeddingWorkerV2**: Uses `registry.get_embedding_config()`, `settings.active_embedding_model`
-- **RerankerWorkerV2**: Uses `registry.get_reranker_config()`, `settings.active_reranker_model`
-- **ScoreWorkerV2**: Extends RerankerWorkerV2, vLLM format
-- **RerankWorkerV2**: Extends RerankerWorkerV2, Cohere format
-- **GuardWorkerV2**: Uses `registry.get_guard_config()`, `settings.active_guard_model`
-
-Each worker `__init__` fetches config like:
+### 1. `cmw_mosec/v2/__init__.py`
 ```python
-from cmw_mosec.server_config import ModelRegistry, load_server_settings
+from .dynamic_server import run_server
 
-settings = load_server_settings()
-registry = ModelRegistry()
-config = registry.get_embedding_config(settings.active_embedding_model.lower())
+__all__ = ["run_server"]
 ```
 
-### 3. Create cmw_mosec/v2/dynamic_server.py
-Mosec server that registers `/v2/` endpoints:
-- `/v2/embeddings` → EmbeddingWorkerV2
-- `/v2/score` → ScoreWorkerV2 (vLLM format)
-- `/v2/rerank` → RerankWorkerV2 (Cohere format)
-- `/v2/moderate` → GuardWorkerV2
+### 2. `cmw_mosec/v2/workers.py`
+Create these classes with dynamic `__init__`:
 
-### 4. Update server_manager.py
-Add method to launch v2 server:
-- Read current settings (`load_server_settings()`)
-- Set environment variables for active models
-- Spawn v2 server via subprocess
-- Use same PID management as v1
+**EmbeddingWorkerV2(Worker)**:
+- `__init__`: Call `load_server_settings().active_embedding_model`, then `ModelRegistry().get_embedding_config()`
+- Copy all methods from generated EmbeddingWorker but use `self.max_length` instead of `MAX_LENGTH`
 
-### 5. Update CLI (optional)
-Add `cmw-mosec start-v2` command or flag.
+**RerankerWorkerV2(Worker)**:
+- `__init__`: Call `load_server_settings().active_reranker_model`, then `ModelRegistry().get_reranker_config()`
+- Copy `_compute_scores` from generated RerankerWorker
 
-## Configuration Flow
+**ScoreWorkerV2(RerankerWorkerV2)**:
+- Copy `forward()` from generated ScoreWorker
 
+**RerankWorkerV2(RerankerWorkerV2)**:
+- Copy `forward()` from generated RerankWorker
+
+**GuardWorkerV2(Worker)**:
+- `__init__`: Call `load_server_settings().active_guard_model`, then `ModelRegistry().get_guard_config()`
+- Copy all methods from generated GuardWorker but use `self.max_new_tokens`, `self.max_length`
+
+### 3. `cmw_mosec/v2/dynamic_server.py`
+```python
+from mosec import Server, Runtime
+from .workers import EmbeddingWorkerV2, ScoreWorkerV2, RerankWorkerV2, GuardWorkerV2
+
+def run_server():
+    server = Server()
+    routes = {
+        "/v2/embeddings": [Runtime(EmbeddingWorkerV2)],
+        "/v2/score": [Runtime(ScoreWorkerV2)],
+        "/v2/rerank": [Runtime(RerankWorkerV2)],
+        "/v2/moderate": [Runtime(GuardWorkerV2)],
+    }
+    server.register_runtime(routes)
+    server.run()
+
+if __name__ == "__main__":
+    run_server()
 ```
-cmw-mosec start → server_manager.py → v2/dynamic_server.py → v2/workers.py
-                      ↓                                       ↓
-              load_server_settings()              registry.get_*_config()
-                      ↓
-              active_embedding_model etc.
+
+## FILES TO MODIFY
+
+### `cmw_mosec/server_manager.py`
+
+Add new method in `MosecServerManager` class:
+```python
+def start_v2(self, background: bool = True) -> tuple[bool, list[str]]:
+    """Start v2 server with dynamic config."""
+    # Read current settings
+    settings = load_server_settings()
+    
+    # Get port from settings.server_port
+    port = settings.server_port
+    
+    # Spawn: python -m cmw_mosec.v2.dynamic_server
+    script_path = self._script_dir / "mosec_server_v2.py"
+    script_path.write_text(f"""
+import sys
+sys.path.insert(0, '{PROJECT_ROOT}')
+from cmw_mosec.v2.dynamic_server import run_server
+run_server()
+""")
+    
+    # subprocess.Popen similar to existing start()
 ```
 
-## Key Design Principles (from AGENTS.md)
+## EXACT COPY-TRANSFORM PATTERN
 
-1. **Lean**: Minimal code, no overengineering
-2. **DRY**: Reuse existing ModelRegistry and settings loading
-3. **Non-breaking**: v1 endpoints unchanged
-4. **12-Factor**: Config in env vars, stateless processes
-5. **Error Handling**: Use logger, try/except around process ops
+1. Take worker code from `~/.cmw-mosec/scripts/mosec_server.py`
+2. In each `__init__`:
+   - DELETE: `self.model_name = RERANKER_MODEL`
+   - ADD: Config lookup from settings + registry
+3. In methods:
+   - REPLACE: `MAX_LENGTH` → `self.max_length`
+   - REPLACE: `DTYPE` → `self.dtype`
+4. Keep all business logic identical (pooling, MRL truncation, scoring methods)
 
-## Code Requirements
+## VERIFICATION STEPS
 
-- Type hints required
-- Google docstring convention
-- Line length: 100
-- ruff for linting
-- snake_case for functions/variables, PascalCase for classes
+1. `ruff check cmw_mosec/v2/`
+2. `python -c "from cmw_mosec.v2 import run_server; print('import ok')"`
+3. Test: `cmw-mosec start-v2`
+4. `curl http://localhost:<port>/v2/embeddings`
+5. Compare responses with v1 endpoints
 
-## Verification Checklist
+## IMPLEMENTATION ORDER
 
-1. **Tests pass**: pytest
-2. **Lint passes**: ruff check
-3. **Shared logic (DRY)**: Reuse ModelRegistry patterns
-4. **Configs in YAML**: Already done
-5. **Scores identical across endpoints**: v1 and v2 produce same results
-6. **All models tested**: Test with FRIDA, Qwen3, DiTy, BAAI, Guard
-7. **CLI commands work**: Both v1 and v2 commands functional
-8. **Other endpoints unchanged**: v1 continues working
-9. **README updated**: Document v2 usage
-
-## Validation Steps
-
-1. Verify v2 workers fetch config correctly
-2. Test v2 endpoints respond correctly with different models
-3. Confirm v1 endpoints still work (backward compatibility)
-4. Verify config changes picked up without regeneration
-5. Test start/stop lifecycle
-6. Health check via HTTP
-7. Multiple start calls (idempotent)
+1. Create `cmw_mosec/v2/__init__.py`
+2. Create `cmw_mosec/v2/workers.py` - EmbeddingWorkerV2 first
+3. Create `cmw_mosec/v2/dynamic_server.py`
+4. Test import: `python -c "from cmw_mosec.v2 import run_server"`
+5. Add `start_v2()` to server_manager.py
+6. Add CLI command
+7. Full integration test
