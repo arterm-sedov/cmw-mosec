@@ -21,7 +21,8 @@ This inventory lists all files changed in cmw-mosec.
 | File | Description |
 |------|-------------|
 | `tests/test_reranker_endpoints.py` | Reranker endpoint contracts |
-| `tests/test_cpu_integration.py` | Combined server integration tests |
+| `tests/test_cpu_integration.py` | Server integration tests |
+| `tests/test_config.yaml` | Test model configuration |
 | `tests/fixtures/test_rankers.yaml` | Test harness configuration |
 
 ## Configuration
