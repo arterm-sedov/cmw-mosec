@@ -33,7 +33,7 @@ embedding_models:
   # Supports OpenAI-compatible /v1/embeddings API with dimensions parameter for MRL
   Qwen/Qwen3-Embedding-0.6B:
     model_id: Qwen/Qwen3-Embedding-0.6B
-    dtype: float16
+    dtype: bf16  # Native tensor type from HF
     batch_size: 8
     memory_gb: 2.0
     workers: 1
@@ -44,7 +44,7 @@ embedding_models:
 
   Qwen/Qwen3-Embedding-4B:
     model_id: Qwen/Qwen3-Embedding-4B
-    dtype: float16
+    dtype: bf16  # Native tensor type from HF
     batch_size: 16
     memory_gb: 12.0
     workers: 1
@@ -55,7 +55,7 @@ embedding_models:
 
   Qwen/Qwen3-Embedding-8B:
     model_id: Qwen/Qwen3-Embedding-8B
-    dtype: float16
+    dtype: bf16  # Native tensor type from HF
     batch_size: 8
     memory_gb: 22.0
     workers: 1
@@ -74,7 +74,7 @@ reranker_models:
   DiTy/cross-encoder-russian-msmarco:
     model_id: DiTy/cross-encoder-russian-msmarco
     reranker_type: cross_encoder
-    dtype: float16
+    dtype: float32  # Native tensor type from HF
     batch_size: 32
     memory_gb: 2.0
     workers: 1
@@ -85,7 +85,7 @@ reranker_models:
   BAAI/bge-reranker-v2-m3:
     model_id: BAAI/bge-reranker-v2-m3
     reranker_type: cross_encoder
-    dtype: float16
+    dtype: float32  # Native tensor type from HF
     batch_size: 32
     memory_gb: 2.0
     workers: 1
@@ -100,7 +100,7 @@ reranker_models:
     scoring_method: raw_logit
     scoring_tokens:
       "true": "Yes"
-    dtype: float16
+    dtype: float32  # Native tensor type from HF
     batch_size: 16
     memory_gb: 8.0
     workers: 1
@@ -118,7 +118,7 @@ reranker_models:
     scoring_tokens:
       "true": "yes"
       "false": "no"
-    dtype: float16
+    dtype: bf16  # Native tensor type from HF
     batch_size: 32
     memory_gb: 2.0
     workers: 1
@@ -133,7 +133,7 @@ reranker_models:
     scoring_tokens:
       "true": "yes"
       "false": "no"
-    dtype: float16
+    dtype: bf16  # Native tensor type from HF
     batch_size: 16
     memory_gb: 12.0
     workers: 1
@@ -148,7 +148,7 @@ reranker_models:
     scoring_tokens:
       "true": "yes"
       "false": "no"
-    dtype: float16
+    dtype: bf16  # Native tensor type from HF
     batch_size: 8
     memory_gb: 22.0
     workers: 1
