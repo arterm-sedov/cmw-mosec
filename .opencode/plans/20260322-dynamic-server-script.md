@@ -1,89 +1,107 @@
 # Plan: Create Dynamic v2 Server Script
 
 ## Objective
-Create a static v2 server script that fetches model configurations at runtime using the same sources as cmw-mosec parent, rather than having them baked in during generation.
+Create a static v2 server that fetches model configurations at runtime using the same sources as cmw-mosec parent, rather than having them baked in during generation.
 
 ## Core Insight
-Instead of modifying the script generator, we will:
-1. Create a new directory `cmw_mosec/v2/`
-2. Copy the generated script structure as a static file
-3. Modify worker `__init__` methods to fetch config dynamically from cmw-mosec's sources
-4. Serve at `/v2/` endpoints
+Create a new directory `cmw_mosec/v2/` with static Python files that:
+1. Fetch configuration at runtime from cmw-mosec's sources (ModelRegistry, settings, env vars)
+2. Serve at `/v2/` endpoints
+3. Follow existing cmw-mosec patterns exactly
 
-## Approach
+## Architecture
 
-### 1. Create Directory Structure
 ```
 cmw_mosec/v2/
-├── __init__.py
-├── dynamic_server.py  # The dynamic v2 server script
-└── workers.py          # Worker classes that fetch config dynamically
+├── __init__.py           # Package exports
+├── workers.py           # Worker classes with dynamic config lookup
+└── dynamic_server.py    # Mosec server setup with /v2/ endpoints
 ```
 
-### 2. Take Existing Generated Script as Base
-Use the generated script at `~/.cmw-mosec/scripts/mosec_server.py` as the template, but modify it to:
-- Fetch configuration at runtime instead of using hardcoded constants
-- Use the same patterns as cmw-mosec parent (`ModelRegistry`, `load_server_settings`)
+## Implementation Steps
 
-### 3. Modify Worker Classes to Use Dynamic Config
-Replace hardcoded constants with runtime lookup:
+### 1. Create cmw_mosec/v2/__init__.py
+Export workers and server components.
 
+### 2. Create cmw_mosec/v2/workers.py
+Worker classes that fetch config dynamically:
+
+- **EmbeddingWorkerV2**: Uses `registry.get_embedding_config()`, `settings.active_embedding_model`
+- **RerankerWorkerV2**: Uses `registry.get_reranker_config()`, `settings.active_reranker_model`
+- **ScoreWorkerV2**: Extends RerankerWorkerV2, vLLM format
+- **RerankWorkerV2**: Extends RerankerWorkerV2, Cohere format
+- **GuardWorkerV2**: Uses `registry.get_guard_config()`, `settings.active_guard_model`
+
+Each worker `__init__` fetches config like:
 ```python
-# Instead of:
-RERANKER_MODEL = "DiTy/cross-encoder-russian-msmarco"
-MAX_LENGTH = 512
+from cmw_mosec.server_config import ModelRegistry, load_server_settings
 
-# Use:
-class RerankerWorker(Worker):
-    def __init__(self):
-        from cmw_mosec.server_config import ModelRegistry, load_server_settings
-        
-        settings = load_server_settings()
-        registry = ModelRegistry()
-        
-        # Get reranker model from settings (set by cmw-mosec) or environment
-        reranker_model = getattr(settings, 'active_reranker_model', None) or os.getenv("ACTIVE_RERANKER_MODEL")
-        
-        config = registry.get_reranker_config(reranker_model.lower())
-        
-        self.model_name = config.model_id
-        self.max_length = config.max_length
-        self.reranker_type = config.reranker_type
-        # ... etc
+settings = load_server_settings()
+registry = ModelRegistry()
+config = registry.get_embedding_config(settings.active_embedding_model.lower())
 ```
 
-### 4. Update Endpoints to /v2/
-Change from:
-- `/v1/embeddings` → `/v2/embeddings`
-- `/v1/score` → `/v2/score`
-- `/v1/rerank` → `/v2/rerank`
-- `/v1/moderate` → `/v2/moderate`
+### 3. Create cmw_mosec/v2/dynamic_server.py
+Mosec server that registers `/v2/` endpoints:
+- `/v2/embeddings` → EmbeddingWorkerV2
+- `/v2/score` → ScoreWorkerV2 (vLLM format)
+- `/v2/rerank` → RerankWorkerV2 (Cohere format)
+- `/v2/moderate` → GuardWorkerV2
 
-### 5. Update server_manager.py
-Add a new method to launch the v2 server:
-- Instead of generating a script, instantiate workers directly from `cmw_mosec.v2.workers`
-- Register routes with `/v2/` endpoints
-- Launch via `subprocess.Popen()` similar to current approach
+### 4. Update server_manager.py
+Add method to launch v2 server:
+- Read current settings (`load_server_settings()`)
+- Set environment variables for active models
+- Spawn v2 server via subprocess
+- Use same PID management as v1
 
-## Key Differences from v1
+### 5. Update CLI (optional)
+Add `cmw-mosec start-v2` command or flag.
 
-| Aspect | v1 (Current) | v2 (New) |
-|--------|-------------|----------|
-| Config source | Baked in at generation | Fetched at runtime |
-| Script | Generated on-demand | Static file in v2/ |
-| Flexibility | Needs regeneration for config change | Works with any model combo |
-| Endpoints | /v1/* | /v2/* |
+## Configuration Flow
 
-## Benefits
+```
+cmw-mosec start → server_manager.py → v2/dynamic_server.py → v2/workers.py
+                      ↓                                       ↓
+              load_server_settings()              registry.get_*_config()
+                      ↓
+              active_embedding_model etc.
+```
 
-1. **No generator modification**: Works with existing `_generate_server_script()`
-2. **True dynamic config**: Workers fetch from ModelRegistry at init time
-3. **Same patterns as parent**: Reuses cmw-mosec's own config loading
-4. **Backward compatible**: v1 endpoints unchanged
-5. **Easy to maintain**: Static file, easy to edit/debug
+## Key Design Principles (from AGENTS.md)
 
-## Validation
-1. Test v2 server starts successfully
-2. Verify all v2 endpoints respond correctly
-3. Confirm model-specific behaviors work
-4. Ensure v1 endpoints still work
+1. **Lean**: Minimal code, no overengineering
+2. **DRY**: Reuse existing ModelRegistry and settings loading
+3. **Non-breaking**: v1 endpoints unchanged
+4. **12-Factor**: Config in env vars, stateless processes
+5. **Error Handling**: Use logger, try/except around process ops
+
+## Code Requirements
+
+- Type hints required
+- Google docstring convention
+- Line length: 100
+- ruff for linting
+- snake_case for functions/variables, PascalCase for classes
+
+## Verification Checklist
+
+1. **Tests pass**: pytest
+2. **Lint passes**: ruff check
+3. **Shared logic (DRY)**: Reuse ModelRegistry patterns
+4. **Configs in YAML**: Already done
+5. **Scores identical across endpoints**: v1 and v2 produce same results
+6. **All models tested**: Test with FRIDA, Qwen3, DiTy, BAAI, Guard
+7. **CLI commands work**: Both v1 and v2 commands functional
+8. **Other endpoints unchanged**: v1 continues working
+9. **README updated**: Document v2 usage
+
+## Validation Steps
+
+1. Verify v2 workers fetch config correctly
+2. Test v2 endpoints respond correctly with different models
+3. Confirm v1 endpoints still work (backward compatibility)
+4. Verify config changes picked up without regeneration
+5. Test start/stop lifecycle
+6. Health check via HTTP
+7. Multiple start calls (idempotent)
