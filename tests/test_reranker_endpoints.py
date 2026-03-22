@@ -72,7 +72,7 @@ def check_score_endpoint(port: int, query: str, documents: list[str]) -> dict:
     Returns: {data: [{index, object, score}, ...]}
     """
     url = f"http://localhost:{port}/v1/score"
-    payload = {"query": query, "documents": documents}
+    payload = {"queries": query, "documents": documents}
 
     response = requests.post(url, json=payload, timeout=60.0)
 
@@ -184,7 +184,7 @@ def run_cross_encoder_tests(
 
             # Verify /v1/score and /v1/rerank produce identical scores
             score_mismatch = False
-            for i, (s1, s2) in enumerate(zip(score_scores, rerank_scores)):
+            for i, (s1, s2) in enumerate(zip(score_scores, rerank_scores, strict=True)):
                 if not math.isclose(s1, s2, rel_tol=1e-5):
                     print(f"    ERROR: Score mismatch at index {i}: {s1:.6f} vs {s2:.6f}")
                     score_mismatch = True

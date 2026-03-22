@@ -417,6 +417,13 @@ tests/
    - Server: tokenizes received string with `max_length` truncation
    - No need to subtract prefix/suffix lengths (already in string)
 
+4. **DiTy cross-encoder max_length bug (FIXED):** Setting `model.tokenizer.model_max_length` during init causes failures:
+   - DiTy tokenizer's default max_length is 512
+   - When `model_max_length` is explicitly set, inputs exceeding 512 tokens cause errors
+   - When NOT set, the tokenizer handles truncation internally
+   - Fix: Remove init-time max_length setting for cross-encoders
+   - The `_compute_scores` method already handles max_length dynamically per-request
+
 ## Migration Path (Non-Breaking)
 
 **Before (current Qwen3 in cmw-mosec):**

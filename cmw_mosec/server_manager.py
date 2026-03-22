@@ -397,7 +397,6 @@ class RerankerWorker(Worker):
             self.model = CrossEncoder(self.model_name)
             if self.model.tokenizer.pad_token is None:
                 self.model.tokenizer.pad_token = self.model.tokenizer.eos_token
-            self.model.tokenizer.model_max_length = self.max_length
 
     def _compute_scores(self, query: str, docs: list, max_length: int) -> list:
         """Compute relevance scores for query-document pairs."""
