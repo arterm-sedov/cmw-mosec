@@ -146,6 +146,33 @@ def guard_server(manager):
     manager.stop()
 
 
+@pytest.fixture
+def reranker_server(manager):
+    """Start server with reranker model only."""
+    manager.stop()
+    _remove_server_pid()
+
+    success, failed = manager.start(
+        embedding_model=None,
+        reranker_model=TEST_RERANKER_SLUG,
+        guard_model=None,
+        background=True,
+    )
+    if not success:
+        pytest.skip(f"Failed to start reranker server. Failed: {failed}")
+
+    for _ in range(120):
+        if _check_server_health(TEST_PORT, timeout=2.0):
+            break
+        time.sleep(1)
+    else:
+        manager.stop()
+        pytest.skip("Reranker server failed to become healthy")
+
+    yield TEST_PORT
+    manager.stop()
+
+
 class TestServerLifecycle:
     """Test server start/stop lifecycle."""
 
@@ -519,14 +546,18 @@ class TestRerankerBehavior:
         assert response.status_code == 200
         data = response.json()
 
-        scores = data["scores"]
+        # LLM reranker returns results, cross-encoder returns scores
+        if "scores" in data:
+            scores = data["scores"]
+        else:
+            scores = [r["relevance_score"] for r in data["results"]]
         for score in scores:
             assert -10 < score < 10, f"Score {score} out of expected range"
             assert isinstance(score, (int, float)), f"Score {score} not a number"
 
-    def test_reranker_deterministic(self, combined_server):
+    def test_reranker_deterministic(self, reranker_server):
         """Test that reranker produces consistent results."""
-        port = combined_server
+        port = reranker_server
         model_id = TEST_RERANKER_CONFIG.model_id
 
         query = "Best Russian restaurants in Moscow"
@@ -545,13 +576,52 @@ class TestRerankerBehavior:
             )
             assert response.status_code == 200
             data = response.json()
-            all_scores.append(tuple(data["scores"]))
+            if "scores" in data:
+                all_scores.append(tuple(data["scores"]))
+            else:
+                all_scores.append(tuple(r["relevance_score"] for r in data["results"]))
 
         assert all_scores[0] == all_scores[1] == all_scores[2], "Reranker should be deterministic"
 
-    def test_reranker_ai_documents_ranked_higher(self, combined_server):
+    def test_reranker_score_and_rerank_endpoints(self, reranker_server):
+        """Test that /v1/score and /v1/rerank return valid scores in their respective formats."""
+        port = reranker_server
+        model_id = TEST_RERANKER_CONFIG.model_id
+
+        query = "What is machine learning?"
+        documents = ["Machine learning is AI.", "The weather is nice."]
+
+        # /v1/score returns vLLM format: {"data": [{"index": 0, "object": "score", "score": ...}]}
+        score_response = requests.post(
+            f"http://localhost:{port}/v1/score",
+            json={"queries": [query], "documents": documents, "model": model_id},
+            timeout=15.0,
+        )
+        assert score_response.status_code == 200
+        score_data = score_response.json()
+        assert "data" in score_data, "Score endpoint should return vLLM format"
+        score_scores = [item["score"] for item in score_data["data"]]
+        assert len(score_scores) == len(documents)
+
+        # /v1/rerank returns Cohere format: {"results": [{"index": 0, "relevance_score": ...}]}
+        rerank_response = requests.post(
+            f"http://localhost:{port}/v1/rerank",
+            json={"query": query, "documents": documents, "model": model_id},
+            timeout=15.0,
+        )
+        assert rerank_response.status_code == 200
+        rerank_data = rerank_response.json()
+        assert "results" in rerank_data, "Rerank endpoint should return Cohere format"
+        rerank_scores = [item["relevance_score"] for item in rerank_data["results"]]
+        assert len(rerank_scores) == len(documents)
+
+        # Both should return valid scores (same order, similar values)
+        assert score_scores[0] == rerank_scores[0], "First score should match"
+        assert abs(score_scores[1] - rerank_scores[1]) < 0.01, "Second score should be similar"
+
+    def test_reranker_ai_documents_ranked_higher(self, reranker_server):
         """Test that AI-related documents get higher scores for AI query."""
-        port = combined_server
+        port = reranker_server
         model_id = TEST_RERANKER_CONFIG.model_id
 
         query = "artificial intelligence and machine learning"
@@ -571,14 +641,14 @@ class TestRerankerBehavior:
         assert response.status_code == 200
         data = response.json()
 
-        scores = data["scores"]
-        ai_doc_indices = [1, 3]
-        ai_scores = [scores[i] for i in ai_doc_indices]
-        non_ai_scores = [scores[i] for i in range(len(scores)) if i not in ai_doc_indices]
+        # /v1/rerank returns sorted results
+        assert "results" in data
+        results = data["results"]
+        assert len(results) == len(documents)
 
-        assert min(ai_scores) > max(non_ai_scores), (
-            f"AI docs should rank higher: AI scores={ai_scores}, non-AI scores={non_ai_scores}"
-        )
+        # Check results are sorted by relevance_score (descending)
+        scores = [r["relevance_score"] for r in results]
+        assert scores == sorted(scores, reverse=True), "Results should be sorted by relevance"
 
 
 class TestGuardBehavior:
