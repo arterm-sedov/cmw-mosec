@@ -368,7 +368,10 @@ class RerankerWorker(Worker):
             # Models like Qwen3-Reranker, BGE-Gemma that use language models
             from transformers import AutoTokenizer, AutoModelForCausalLM
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, padding_side='left')
-            self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                device_map="auto" if torch.cuda.is_available() else None
+            )
             self.model.eval()
 
             # Set pad token if not set
