@@ -356,6 +356,8 @@ SCORING_TOKENS = {scoring_tokens_str}
 
 
 class RerankerWorker(Worker):
+    """Base reranker worker with shared logic for both endpoints."""
+
     def __init__(self):
         self.model_name = RERANKER_MODEL
         self.max_length = MAX_LENGTH
@@ -428,14 +430,11 @@ class RerankerWorker(Worker):
             return scores
         else:
             # cross_encoder: standard sentence_transformers approach
-            original_max_length = self.model.tokenizer.model_max_length
-            if max_length != original_max_length:
-                self.model.tokenizer.model_max_length = max_length
-            try:
-                scores = self.model.predict([[query, doc] for doc in docs])
-                return scores.tolist()
-            finally:
-                self.model.tokenizer.model_max_length = original_max_length
+            # NOTE: Do NOT set model_max_length for cross-encoders
+            # CrossEncoder models handle truncation internally when max_length is NOT set
+            # Setting it explicitly causes failures for inputs exceeding the limit
+            scores = self.model.predict([[query, doc] for doc in docs])
+            return scores.tolist()
 
     def deserialize(self, data: bytes) -> dict[str, Any]:
         return json.loads(data.decode("utf-8"))
@@ -443,36 +442,46 @@ class RerankerWorker(Worker):
     def serialize(self, data: dict[str, Any]) -> bytes:
         return json.dumps(data).encode("utf-8")
 
-    def forward(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Forward pass for reranker endpoint.
-
-        Supports two formats detected by request parameters:
-        - vLLM score format: "queries" parameter (returns data array)
-        - Cohere format: "query" + "docs" (returns results array)
-
-        Single model instance handles both output formats.
-        """
+    def _get_query_and_docs(self, data: dict[str, Any]) -> tuple[str, list]:
+        """Extract query and documents from request."""
         docs = data.get("docs") or data.get("documents")
         effective_max_length = data.get("max_length") or self.max_length
-
-        # vLLM score format: uses "queries" parameter
-        if "queries" in data:
-            query = data["queries"]
-            if isinstance(query, list):
-                query = query[0] if query else ""
-            scores = self._compute_scores(query, docs, effective_max_length)
-            return {{
-                "data": [
-                    {{"index": i, "object": "score", "score": float(s)}}
-                    for i, s in enumerate(scores)
-                ]
-            }}
-
-        # Cohere format: uses "query" parameter
         query = data.get("query", "")
-        scores = self._compute_scores(query, docs, effective_max_length)
+        return query, docs, effective_max_length
 
-        # Cohere format (standard rerank request)
+
+class ScoreWorker(RerankerWorker):
+    """Worker for /v1/score endpoint - returns vLLM format."""
+
+    def forward(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Return vLLM score format: {{data: [{{index, object, score}}, ...]}}"""
+        # vLLM standard: uses "queries" parameter
+        query = data.get("queries", "")
+        if isinstance(query, list):
+            query = query[0] if query else ""
+        docs = data.get("documents", [])
+        max_length = data.get("max_length") or self.max_length
+
+        scores = self._compute_scores(query, docs, max_length)
+
+        return {{
+            "data": [
+                {{"index": i, "object": "score", "score": float(s)}}
+                for i, s in enumerate(scores)
+            ]
+        }}
+
+
+class RerankWorker(RerankerWorker):
+    """Worker for /v1/rerank endpoint - returns Cohere format."""
+
+    def forward(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Return Cohere rerank format: {{results: [{{index, document, relevance_score}}, ...]}}"""
+        # Cohere standard: uses "query" parameter
+        query, docs, max_length = self._get_query_and_docs(data)
+        scores = self._compute_scores(query, docs, max_length)
+
+        # Sort by relevance score (descending)
         top_n = data.get("top_n")
         indexed_scores = list(enumerate(zip(docs, scores)))
         indexed_scores.sort(key=lambda x: x[1][1], reverse=True)
@@ -480,10 +489,12 @@ class RerankerWorker(Worker):
         if top_n is not None:
             indexed_scores = indexed_scores[:top_n]
 
-        return {{"results": [
-            {{"index": i, "document": {{"text": doc}}, "relevance_score": float(score)}}
-            for i, (doc, score) in indexed_scores
-        ]}}
+        return {{
+            "results": [
+                {{"index": i, "document": {{"text": doc}}, "relevance_score": float(score)}}
+                for i, (doc, score) in indexed_scores
+            ]
+        }}
 
 
 '''
@@ -661,12 +672,13 @@ if __name__ == "__main__":
     if "EmbeddingWorker" in globals():
         routes["/v1/embeddings"] = [Runtime(EmbeddingWorker)]
 
-    # Register reranker endpoints (single worker, single memory allocation)
-    # RerankerWorker.forward() handles both vLLM score and Cohere formats
-    if "RerankerWorker" in globals():
-        reranker = Runtime(RerankerWorker)
-        routes["/v1/rerank"] = [reranker]
-        routes["/v1/score"] = [reranker]
+    # Register reranker endpoints with separate workers for each format
+    # ScoreWorker: /v1/score -> vLLM format {{data: [...]}}
+    # RerankWorker: /v1/rerank -> Cohere format {{results: [...]}}
+    if "ScoreWorker" in globals():
+        routes["/v1/score"] = [Runtime(ScoreWorker)]
+    if "RerankWorker" in globals():
+        routes["/v1/rerank"] = [Runtime(RerankWorker)]
 
     # Register guard endpoint
     if "GuardWorker" in globals():

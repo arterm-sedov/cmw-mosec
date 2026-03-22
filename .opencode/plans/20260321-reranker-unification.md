@@ -417,12 +417,12 @@ tests/
    - Server: tokenizes received string with `max_length` truncation
    - No need to subtract prefix/suffix lengths (already in string)
 
-4. **DiTy cross-encoder max_length bug (FIXED):** Setting `model.tokenizer.model_max_length` during init causes failures:
-   - DiTy tokenizer's default max_length is 512
-   - When `model_max_length` is explicitly set, inputs exceeding 512 tokens cause errors
+4. **Cross-encoder max_length bug (FIXED):** Setting `model.tokenizer.model_max_length` causes failures:
+   - CrossEncoder models (DiTy, BGE-m3, etc.) handle truncation internally
+   - When `model_max_length` is explicitly set (even dynamically), inputs exceeding the limit cause errors
    - When NOT set, the tokenizer handles truncation internally
-   - Fix: Remove init-time max_length setting for cross-encoders
-   - The `_compute_scores` method already handles max_length dynamically per-request
+   - Fix: Do NOT set `model_max_length` for cross-encoders at all
+   - The `_compute_scores` method no longer touches `model_max_length`
 
 ## Migration Path (Non-Breaking)
 
@@ -483,21 +483,21 @@ Same contract for mosec, vLLM, any provider.
 
 | Endpoint | Request | Response | Format |
 |----------|---------|----------|--------|
-| `/v1/score` | `{query, documents}` | `{data: [{index, object, score}, ...]}` | vLLM |
+| `/v1/score` | `{queries, documents}` | `{data: [{index, object, score}, ...]}` | vLLM |
 | `/v1/rerank` | `{query, documents, top_n?}` | `{results: [{index, document, relevance_score}, ...]}` | Cohere/Jina |
 
 ### Key Decisions
 
 1. **Industry-standard contracts**: Aligned with vLLM/Cohere/Jina APIs
-2. **Breaking change approved**: cmw-rag will be refactored
+2. **Separate workers per endpoint**: `ScoreWorker` for `/v1/score`, `RerankWorker` for `/v1/rerank`
 3. **Client-side formatting**: All prefix/suffix/instruction moved to client (cmw-rag)
 4. **Server is agnostic**: Accepts pre-formatted strings, returns scores
 
 ### Breaking Changes
 
-- `/v1/score` returns vLLM format (not simple `{scores: [...]}`)
-- `/v1/rerank` returns Cohere format (not simple `{scores: [...]}`)
-- No backward compatibility - cmw-rag refactor required
+- `/v1/score` uses `queries` parameter (vLLM standard), returns `{data: [...]}`
+- `/v1/rerank` uses `query` parameter (Cohere standard), returns `{results: [...]}`
+- No backward compatibility - cmw-rag uses `queries` for `/v1/score`
 
 ### Files Changed
 

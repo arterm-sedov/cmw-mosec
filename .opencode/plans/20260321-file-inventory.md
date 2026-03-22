@@ -11,7 +11,7 @@ This inventory lists all files changed in cmw-mosec.
 
 | File | Changes |
 |------|---------|
-| `cmw_mosec/server_manager.py` | Unified reranker endpoints, single worker fix, DiTy max_length fix |
+| `cmw_mosec/server_manager.py` | Separate ScoreWorker/RerankWorker, cross-encoder max_length fix |
 | `cmw_mosec/server_config.py` | Added reranker_type config field |
 | `cmw_mosec/cli.py` | Added /v1/score endpoint support |
 | `config/models.yaml` | Added dimensions, max_length, reranker config |
@@ -44,7 +44,7 @@ This inventory lists all files changed in cmw-mosec.
 | File | Date | Description |
 |------|------|-------------|
 | `.opencode/plans/20260320-reranker-unification.md` | Mar 20 | Reranker unification plan |
-| `.opencode/plans/20260321-reranker-unification.md` | Mar 22 | Final reranker plan (DiTy max_length fix documented) |
+| `.opencode/plans/20260321-reranker-unification.md` | Mar 22 | Final reranker plan (separate workers, vLLM `queries`) |
 | `.opencode/plans/20260321-qwen3-embedding-fix.md` | Mar 21 | Embedding fixes |
 | `.opencode/analysis/20260321-vram-analysis.md` | Mar 22 | VRAM memory analysis |
 | `.opencode/progress_reports/20260319-*.md` | Mar 19 | Implementation reports |
