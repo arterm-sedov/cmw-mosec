@@ -496,7 +496,17 @@ GUARD_MOSEC_ENDPOINT=http://localhost:7998/v1/moderate
 
 The server port (default `SERVER_PORT=7998`) must match between cmw-mosec and cmw-rag configs. See `docs/deployment/deployment_architecture.md` in cmw-rag for the full deployment topology.
 
-ChromaDB (vector store) and the RAG Gradio UI run as systemd user services — `cmw-rag-chroma.service` and `cmw-rag-app.service` in the cmw-rag repo (`systemd/`).
+All services run as systemd user services in the cmw-rag repo (`systemd/`):
+- ChromaDB — `cmw-rag-chroma.service`
+- Mosec — `cmw-rag-mosec.service`
+- RAG Gradio UI — `cmw-rag-app.service` (depends on both ChromaDB and Mosec)
+
+Install any service:
+```bash
+ln -sf /path/to/cmw-rag/systemd/cmw-rag-mosec.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now cmw-rag-mosec
+```
 
 ## Performance Benchmarks
 
