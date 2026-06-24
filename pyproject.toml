@@ -48,8 +48,8 @@ dev = [
 cmw-mosec = "cmw_mosec.cli:cli"
 
 [project.urls]
-Homepage = "https://github.com/arterm-sedov/cmw-mosec"
-Repository = "https://github.com/arterm-sedov/cmw-mosec"
+Homepage = "https://github.com/cmw-team/cmw-mosec"
+Repository = "https://github.com/cmw-team/cmw-mosec"
 
 [tool.hatch.build.targets.wheel]
 packages = ["cmw_mosec"]

@@ -2,13 +2,15 @@
 
 Mosec server management tool for CMW projects. Provides easy setup and server management for embedding, reranker, and content safety guard inference.
 
+**Original author:** [Arterm Sedov](https://github.com/arterm-sedov)
+
 ## AI-Enabled Repo
 
 Chat with DeepWiki to get answers about this repo:
 
-[Ask DeepWiki](https://deepwiki.com/arterm-sedov/cmw-mosec)
+[Ask DeepWiki](https://deepwiki.com/cmw-team/cmw-mosec)
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/arterm-sedov/cmw-mosec)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/cmw-team/cmw-mosec)
 
 ## Features
 
@@ -24,7 +26,7 @@ Chat with DeepWiki to get answers about this repo:
 ## Installation
 
 ```bash
-git clone https://github.com/arterm-sedov/cmw-mosec.git
+git clone https://github.com/cmw-team/cmw-mosec.git
 cd cmw-mosec
 pip install -e .
 ```
@@ -471,6 +473,28 @@ doc = "search_document: " + document_text
 2. Reduce batch size in `.env`: `BATCH_SIZE=16`
 3. Load fewer models simultaneously
 4. Use CPU mode: `DEVICE=cpu`
+
+## Integration with cmw-rag
+
+To use cmw-mosec as the embedding, reranker, and guard backend for [cmw-rag](https://github.com/cmw-team/cmw-rag):
+
+```bash
+# In cmw-rag/.env
+EMBEDDING_PROVIDER_TYPE=mosec
+EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
+MOSEC_EMBEDDING_ENDPOINT=http://localhost:7998/v1/embeddings
+
+RERANK_ENABLED=true
+RERANKER_PROVIDER_TYPE=mosec
+RERANKER_MODEL=Qwen/Qwen3-Reranker-0.6B
+MOSEC_RERANKER_ENDPOINT=http://localhost:7998/v1/score
+
+GUARD_ENABLED=true
+GUARD_PROVIDER_TYPE=mosec
+GUARD_MOSEC_ENDPOINT=http://localhost:7998/v1/moderate
+```
+
+The server port (default `SERVER_PORT=7998`) must match between cmw-mosec and cmw-rag configs. See `docs/deployment/deployment_architecture.md` in cmw-rag for the full deployment topology.
 
 ## Performance Benchmarks
 
