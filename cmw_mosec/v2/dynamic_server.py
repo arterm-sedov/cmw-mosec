@@ -27,6 +27,8 @@ def run_server():
         routes["/v1/embeddings"] = [Runtime(EmbeddingWorkerV2)]
 
     if os.getenv("ACTIVE_RERANKER_MODEL"):
+        # CPU fallback: increase timeout if running without GPU (default 3s)
+        # timeout = int(os.getenv("MOSEC_FORWARD_TIMEOUT", "120")) if not _has_gpu else 0
         routes["/v1/score"] = [Runtime(ScoreWorkerV2)]
         routes["/v1/rerank"] = [Runtime(RerankWorkerV2)]
 
