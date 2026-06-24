@@ -496,6 +496,8 @@ GUARD_MOSEC_ENDPOINT=http://localhost:7998/v1/moderate
 
 The server port (default `SERVER_PORT=7998`) must match between cmw-mosec and cmw-rag configs. See `docs/deployment/deployment_architecture.md` in cmw-rag for the full deployment topology.
 
+ChromaDB (vector store) runs as a systemd user service — `cmw-rag-chroma.service` in the cmw-rag repo (`systemd/cmw-rag-chroma.service`).
+
 ## Performance Benchmarks
 
 Tested on RTX 4090 (24GB VRAM):
