@@ -476,7 +476,9 @@ doc = "search_document: " + document_text
 
 ## Integration with cmw-rag
 
-To use cmw-mosec as the embedding, reranker, and guard backend for [cmw-rag](https://github.com/cmw-team/cmw-rag):
+The authoritative single-source-of-truth for the full deployment topology is `docs/deployment/deployment_architecture.md` in the [cmw-rag](https://github.com/cmw-team/cmw-rag) repo.
+
+To use cmw-mosec as the embedding, reranker, and guard backend for cmw-rag:
 
 ```bash
 # In cmw-rag/.env
