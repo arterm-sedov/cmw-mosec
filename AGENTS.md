@@ -50,6 +50,56 @@ Manages Mosec server processes:
 - status: Show running servers
 - list: Show available models
 
+## Systemd Service Management
+
+Production services run as systemd user services. **Do NOT start services manually** — this causes port conflicts.
+
+### Services
+
+| Service | Port | Command |
+|---------|------|---------|
+| `cmw-rag-mosec` | 7998 | Embedding/reranker/guard server |
+
+### Commands
+
+```bash
+# Status
+systemctl --user status cmw-rag-mosec
+
+# Lifecycle
+systemctl --user start cmw-rag-mosec
+systemctl --user stop cmw-rag-mosec
+systemctl --user restart cmw-rag-mosec
+
+# Logs
+journalctl --user -u cmw-rag-mosec -f
+journalctl --user -u cmw-rag-mosec --no-pager -n 50
+```
+
+### Important
+
+- Service file lives in `cmw-rag/systemd/cmw-rag-mosec.service`, symlinked to `~/.config/systemd/user/`
+- Service auto-restarts on failure and after reboot
+- **Never run `cmw-mosec serve` manually in production** — use `systemctl --user start` instead
+- First-time prerequisite: `loginctl enable-linger $USER` (allows user services at boot)
+
+**Development (manual):**
+
+```bash
+cd cmw-mosec && source .venv/bin/activate
+cmw-mosec serve --foreground
+```
+
+### Active Models
+
+| Type | Model | VRAM |
+|------|-------|------|
+| Embedding | `Qwen/Qwen3-Embedding-0.6B` | ~2GB |
+| Reranker | `Qwen/Qwen3-Reranker-0.6B` | ~2GB |
+| Guard | `Qwen/Qwen3Guard-Gen-0.6B` | ~4GB |
+
+> Full deployment details: `cmw-rag/docs/deployment/deployment_architecture.md`
+
 ## Dependencies
 
 Core:
